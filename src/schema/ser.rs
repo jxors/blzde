@@ -158,7 +158,7 @@ impl<'s> ser::Serializer for SchemaSerializer<'s> {
     }
 
     fn serialize_unit(self) -> Result<Self::Ok, Self::Error> {
-        self.output_schema.union_with(Schema::Unit);
+        self.output_schema.union_with(Schema::Unit)?;
         Ok(())
     }
 
@@ -166,7 +166,7 @@ impl<'s> ser::Serializer for SchemaSerializer<'s> {
         self.output_schema.union_with(Schema::TupleStruct {
             name: name.to_string(),
             fields: Vec::new(),
-        });
+        })?;
         Ok(())
     }
 
@@ -258,7 +258,7 @@ impl<'s> ser::Serializer for SchemaSerializer<'s> {
         self.output_schema.union_with(Schema::Seq {
             len: ValueRange::single(len.unwrap_or(0) as u64),
             item: Box::new(Schema::Never),
-        });
+        })?;
 
         let Schema::Seq { len, item } = self.output_schema else {
             return Err(SchemaError::UnexpectedSchema {
@@ -277,7 +277,7 @@ impl<'s> ser::Serializer for SchemaSerializer<'s> {
     fn serialize_tuple(self, len: usize) -> Result<Self::SerializeTuple, Self::Error> {
         self.output_schema.union_with(Schema::Tuple {
             fields: vec![Schema::Never; len],
-        });
+        })?;
 
         let Schema::Tuple { fields } = self.output_schema else {
             return Err(SchemaError::UnexpectedSchema {
