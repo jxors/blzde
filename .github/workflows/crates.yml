@@ -1,0 +1,13 @@
+on:
+  release:
+    types: [created]
+  workflow_dispatch: ""
+name: Publish to crates.io
+jobs:
+  build:
+    name: Publish to crates.io
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Package
+        run: ./crates.io_version_check.sh blzde || cargo publish -p blzde --token ${{ secrets.CRATES_IO_API_TOKEN }}
