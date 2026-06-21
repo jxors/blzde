@@ -579,6 +579,11 @@ impl<'state, 'de, 'r, 'format, R: Read> MapAccess<'de> for StructFields<'state, 
             Ok(None)
         }
     }
+
+    #[inline(always)]
+    fn size_hint(&self) -> Option<usize> {
+        Some(self.fields.len())
+    }
 }
 
 impl<'state, 'de, 'r, 'format, R: Read> SeqAccess<'de> for StructFields<'state, 'r, 'format, R> {
@@ -598,6 +603,11 @@ impl<'state, 'de, 'r, 'format, R: Read> SeqAccess<'de> for StructFields<'state, 
         } else {
             Ok(None)
         }
+    }
+
+    #[inline(always)]
+    fn size_hint(&self) -> Option<usize> {
+        Some(self.fields.len())
     }
 }
 
@@ -718,6 +728,11 @@ impl<'de, 'state, 'r, 'format, R: Read> SeqAccess<'de> for TupleFields<'state, '
             Ok(None)
         }
     }
+
+    #[inline(always)]
+    fn size_hint(&self) -> Option<usize> {
+        Some(self.fields.len())
+    }
 }
 
 struct SizedSequence<'state, 'r, 'format, R> {
@@ -744,6 +759,11 @@ impl<'state, 'de, 'r, 'format, R: Read> SeqAccess<'de> for SizedSequence<'state,
         } else {
             Ok(None)
         }
+    }
+
+    #[inline(always)]
+    fn size_hint(&self) -> Option<usize> {
+        Some(self.remaining)
     }
 }
 
@@ -781,6 +801,11 @@ impl<'state, 'de, 'r, 'format, R: Read> MapAccess<'de> for SizedMap<'state, 'r, 
             format: self.value,
             state: &mut *self.state,
         })
+    }
+
+    #[inline(always)]
+    fn size_hint(&self) -> Option<usize> {
+        Some(self.remaining)
     }
 }
 
