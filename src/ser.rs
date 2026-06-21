@@ -1,4 +1,4 @@
-use crate::schema::buf::{Format, FormatBuffer, FormatId, NamedFormat, Primitive};
+use crate::schema::formats::{Format, SchemaFormats, FormatId, NamedFormat, Primitive};
 use serde::ser::{self, SerializeTuple, SerializeTupleVariant};
 use std::{error::Error, fmt::Display, io::Write};
 
@@ -43,13 +43,13 @@ impl From<std::io::Error> for SerializeError {
 }
 
 pub struct Serializer<'r, 'format, W> {
-    buf: &'format FormatBuffer,
+    buf: &'format SchemaFormats<'format>,
     format: Format<'format>,
     writer: &'r mut W,
 }
 
 impl<'r, 'format, W: Write> Serializer<'r, 'format, W> {
-    pub fn new(buf: &'format FormatBuffer, writer: &'r mut W) -> Self {
+    pub fn new(buf: &'format SchemaFormats, writer: &'r mut W) -> Self {
         Self {
             buf,
             format: buf.root(),
@@ -305,7 +305,9 @@ impl<'r, 'format, W: Write> ser::Serializer for Serializer<'r, 'format, W> {
                 found: self.format.make_static(),
             });
         };
-        let index = variants.items().iter().position(|item| self.buf[item.0] == *variant).unwrap();
+        let Some(index) = variants.items().iter().position(|item| self.buf[item.0] == *variant) else {
+            panic!("Cannot find variant {variant} in {variants:?}")
+        };
         self.write_primitive(variant_index, index as u64)?;
 
         let variant_format = self.buf.format(variants.items()[index].1);
@@ -408,7 +410,7 @@ impl<'r, 'format, W: Write> ser::SerializeSeq for SeqSerializer<'r, 'format, W> 
 pub struct MapSerializer<'r, 'format, W> {
     key: Format<'format>,
     value: Format<'format>,
-    buf: &'format FormatBuffer,
+    buf: &'format SchemaFormats<'format>,
     writer: &'r mut W,
 }
 
@@ -445,7 +447,7 @@ impl<'r, 'format, W: Write> ser::SerializeMap for MapSerializer<'r, 'format, W> 
 
 pub struct StructSerializer<'r, 'format, W> {
     fields: &'format [NamedFormat],
-    buf: &'format FormatBuffer,
+    buf: &'format SchemaFormats<'format>,
     writer: &'r mut W,
 }
 
@@ -509,7 +511,7 @@ impl<'r, 'format, W: Write> ser::SerializeStructVariant for StructSerializer<'r,
 
 pub struct TupleSerializer<'r, 'format, W> {
     fields: &'format [FormatId],
-    buf: &'format FormatBuffer,
+    buf: &'format SchemaFormats<'format>,
     writer: &'r mut W,
 }
 

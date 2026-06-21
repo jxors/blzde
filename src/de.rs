@@ -1,4 +1,4 @@
-use crate::schema::buf::{Format, FormatBuffer, FormatId, NamedFormat, Primitive, SchemaParseError, View};
+use crate::schema::formats::{Format, SchemaFormats, FormatId, NamedFormat, Primitive, SchemaParseError, View};
 use serde::de::{self, EnumAccess, MapAccess, SeqAccess, VariantAccess};
 use std::{error::Error, fmt::Display, io::Read};
 
@@ -53,13 +53,13 @@ impl From<SchemaParseError> for DeserializeError {
 }
 
 pub struct State<'r, 'format, R> {
-    buf: &'format FormatBuffer,
+    buf: &'format SchemaFormats<'format>,
     read: &'r mut R,
     field_equivalences: Vec<*const &'static str>,
 }
 
 impl<'r, 'format, R: Read> State<'r, 'format, R> {
-    pub fn new(buf: &'format FormatBuffer, read: &'r mut R) -> Self {
+    pub fn new(buf: &'format SchemaFormats, read: &'r mut R) -> Self {
         Self {
             buf,
             read,
@@ -125,14 +125,13 @@ impl<'state, 'r, 'format, R: Read> Deserializer<'state, 'r, 'format, R> {
 
     #[inline(always)]
     fn read_primitive(&mut self) -> Result<u64, DeserializeError> {
-        let Format::Primitive(primitive) = self.format() else {
-            return Err(DeserializeError::UnexpectedFormat {
+        match self.format() {
+            Format::Primitive(primitive) => Ok(self.read_oob_primitive(primitive)?),
+            format => Err(DeserializeError::UnexpectedFormat {
                 expected: "primitive",
-                found: self.format().make_static(),
-            });
-        };
-
-        Ok(self.read_oob_primitive(primitive)?)
+                found: format.make_static(),
+            })
+        }
     }
 
     fn read_vec(&mut self, len: usize) -> std::io::Result<Vec<u8>> {

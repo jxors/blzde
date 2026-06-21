@@ -12,9 +12,7 @@
 //! ```
 
 use crate::{
-    de::{Deserializer, State},
-    schema::{Schema, buf::FormatBuffer},
-    ser::Serializer,
+    de::{Deserializer, State}, schema::{Schema, formats::{FormatStorage, SchemaFormats}}, ser::Serializer,
 };
 use serde::{Deserialize, Serialize};
 use std::io::{Cursor, Read, Write};
@@ -37,7 +35,8 @@ const MAGIC_NUMBER: u32 = 0x011B_115au32;
 /// You should wrap `writer` in a [`std::io::BufWriter`] if this is desired.
 pub fn into_writer<T: Serialize>(value: &T, mut writer: impl Write) -> Result<(), SerializeError> {
     let schema = Schema::of(&value);
-    let format = schema.to_format();
+    let mut storage = schema.make_format_storage();
+    let format = schema.to_format(storage.create_bump_alloc());
 
     writer.write_all(&MAGIC_NUMBER.to_le_bytes())?;
     format.write_into(&mut writer)?;
@@ -64,7 +63,8 @@ pub fn from_reader<'de, T: Deserialize<'de>>(mut reader: impl Read) -> Result<T,
         return Err(DeserializeError::Custom(String::from("invalid magic number")));
     }
 
-    let format = FormatBuffer::read_from(&mut reader)?;
+    let storage = FormatStorage::read_from(&mut reader)?;
+    let format = SchemaFormats::read_from(&storage)?;
     if format.is_empty() {
         return Err(DeserializeError::EmptyFormat);
     }

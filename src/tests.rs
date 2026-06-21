@@ -1,4 +1,4 @@
-use crate::{de::Deserializer, schema::Schema, ser::Serializer};
+use crate::{de::Deserializer, schema::{Schema, formats::FormatStorage}, ser::Serializer};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{collections::HashMap, fmt::Debug, io::Cursor};
 
@@ -215,7 +215,8 @@ fn test_enum() {
 
 fn test_serde_roundtrip<T: Debug + Serialize + DeserializeOwned + PartialEq>(val: &T) {
     let schema = Schema::of(&val);
-    let format = schema.to_format();
+    let mut storage = schema.make_format_storage();
+    let format = schema.to_format(storage.create_bump_alloc());
     println!("Format: {:#?}", format);
 
     let output = crate::to_vec(val);
