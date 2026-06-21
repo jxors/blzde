@@ -1,0 +1,275 @@
+use std::{collections::HashMap, fmt::Display};
+
+use serde::Serialize;
+
+use crate::schema::{
+    buf::{Format, FormatBuffer, FormatId, NamedFormat, Primitive, View},
+    ser::SchemaSerializer,
+};
+
+pub mod buf;
+mod ser;
+
+#[derive(Clone, Debug)]
+pub struct UnionError {
+    lhs: Schema,
+    rhs: Schema,
+}
+
+impl Display for UnionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "unable to union {:?} with {:?}", self.lhs, self.rhs)
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct FieldSchema {
+    name: String,
+    value: Schema,
+}
+
+#[derive(Clone, Debug)]
+pub struct VariantSchema {
+    name: String,
+    data: VariantData,
+}
+
+#[derive(Clone, Debug)]
+pub enum VariantData {
+    Unit,
+    Tuple { fields: Vec<Schema> },
+    Struct { fields: Vec<FieldSchema> },
+}
+
+impl VariantData {
+    fn make_format(&self, f: &mut FormatBuffer) -> FormatId {
+        match self {
+            VariantData::Unit => f.make_format(Format::Unit),
+            VariantData::Tuple { fields: values } => {
+                let fields = values.iter().map(|field| field.make_format(f)).collect::<Vec<_>>();
+                f.make_format(Format::Tuple {
+                    fields: View::new(&fields),
+                })
+            },
+            VariantData::Struct { fields } => {
+                let fields = fields
+                    .iter()
+                    .map(|field| NamedFormat(f.make_symbol(&field.name), field.value.make_format(f)))
+                    .collect::<Vec<_>>();
+
+                f.make_format(Format::Struct {
+                    fields: View::new(&fields),
+                })
+            },
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct ValueRange<T> {
+    min: T,
+    max_inclusive: T,
+}
+
+impl<T: Copy> ValueRange<T> {
+    pub fn single(val: T) -> Self {
+        Self {
+            min: val,
+            max_inclusive: val,
+        }
+    }
+}
+
+impl ValueRange<u64> {
+    fn size(&self) -> u32 {
+        let len = self.max_inclusive - self.min;
+        64 - len.leading_zeros()
+    }
+
+    fn to_primitive(&self) -> Primitive {
+        if self.min <= 0xff && self.max_inclusive <= 0xff {
+            Primitive::U8
+        } else if self.size() <= 32 {
+            Primitive::AdjustedU32(self.min)
+        } else {
+            Primitive::U64
+        }
+    }
+}
+
+impl From<ValueRange<i64>> for ValueRange<u64> {
+    fn from(value: ValueRange<i64>) -> Self {
+        ValueRange {
+            min: value.min as u64,
+            max_inclusive: value.max_inclusive as u64,
+        }
+    }
+}
+
+impl<T: Copy + Ord> ValueRange<T> {
+    fn union_with(&mut self, b: ValueRange<T>) {
+        if b.min < self.min {
+            self.min = b.min;
+        }
+
+        if b.max_inclusive > self.max_inclusive {
+            self.max_inclusive = b.max_inclusive;
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum Schema {
+    Struct {
+        name: String,
+        fields: Vec<FieldSchema>,
+    },
+    U64(ValueRange<u64>),
+    I64(ValueRange<i64>),
+    U128(ValueRange<u128>),
+    I128(ValueRange<i128>),
+    Seq {
+        len: ValueRange<u64>,
+        item: Box<Schema>,
+    },
+    Bytes {
+        len: ValueRange<u64>,
+    },
+    Option {
+        item: Box<Schema>,
+    },
+    Str {
+        len: ValueRange<u64>,
+    },
+    Unit,
+    TupleStruct {
+        name: String,
+        fields: Vec<Schema>,
+    },
+    Tuple {
+        fields: Vec<Schema>,
+    },
+    Enum {
+        name: String,
+        variants: HashMap<u32, VariantSchema>,
+    },
+    Map {
+        len: ValueRange<u64>,
+        key: Box<Schema>,
+        value: Box<Schema>,
+    },
+    Never,
+}
+
+impl Schema {
+    pub fn of<T: Serialize>(val: &T) -> Schema {
+        let mut result = Schema::Never;
+        val.serialize(SchemaSerializer::new(&mut result)).unwrap();
+        result
+    }
+
+    pub fn to_format(&self) -> FormatBuffer {
+        let mut buffer = FormatBuffer::new();
+        let root = self.make_format(&mut buffer);
+        buffer.set_root(root);
+        buffer
+    }
+
+    fn union_with(&mut self, other: Schema) -> Result<(), UnionError> {
+        match (self, other) {
+            (me @ Schema::Never, other) => *me = other,
+            (_, Schema::Never) => (),
+            (Schema::U64(a), Schema::U64(b)) => a.union_with(b),
+            (Schema::I64(a), Schema::I64(b)) => a.union_with(b),
+            (Schema::Str { len: len_a }, Schema::Str { len: len_b }) => len_a.union_with(len_b),
+            (
+                Schema::Seq { len, item },
+                Schema::Seq {
+                    len: other_len,
+                    item: other_item,
+                },
+            ) => {
+                len.union_with(other_len);
+                item.union_with(*other_item)?;
+            },
+            (Schema::Option { item }, Schema::Option { item: other_item }) => item.union_with(*other_item)?,
+            (Schema::Tuple { fields }, Schema::Tuple { fields: other_fields }) => {
+                assert_eq!(
+                    fields.len(),
+                    other_fields.len(),
+                    "tuples must have same number of fields: {fields:?} vs {other_fields:?}"
+                );
+                for (a, b) in fields.iter_mut().zip(other_fields.into_iter()) {
+                    a.union_with(b)?;
+                }
+            },
+            (a, b) => return Err(UnionError { lhs: a.clone(), rhs: b }),
+        }
+
+        Ok(())
+    }
+
+    fn get_or_create(&mut self, other: Schema) -> &mut Self {
+        if let Self::Never = self {
+            *self = other;
+        }
+
+        self
+    }
+
+    pub fn make_format(&self, f: &mut FormatBuffer) -> FormatId {
+        match self {
+            Schema::Struct { fields, .. } => {
+                let fields = fields
+                    .iter()
+                    .map(|field| NamedFormat(f.make_symbol(&field.name), field.value.make_format(f)))
+                    .collect::<Vec<_>>();
+
+                f.make_format(Format::Struct {
+                    fields: View::new(&fields),
+                })
+            },
+            Schema::U64(range) => f.make_format(Format::Primitive(range.to_primitive())),
+            Schema::I64(range) => f.make_format(Format::Primitive(ValueRange::<u64>::from(*range).to_primitive())),
+            Schema::U128(_) | Schema::I128(_) => f.make_format(Format::U128),
+            Schema::Seq { len, item } => {
+                let inner = item.make_format(f);
+                f.make_format(Format::Sequence {
+                    len: len.to_primitive(),
+                    inner,
+                })
+            },
+            Schema::Bytes { len } => f.make_format(Format::Bytes { len: len.to_primitive() }),
+            Schema::Option { item } => {
+                let inner = item.make_format(f);
+                f.make_format(Format::Option { inner })
+            },
+            Schema::Str { len } => f.make_format(Format::String { len: len.to_primitive() }),
+            Schema::Unit => f.make_format(Format::Unit),
+            Schema::TupleStruct { fields, .. } | Schema::Tuple { fields } => {
+                let fields = fields.iter().map(|field| field.make_format(f)).collect::<Vec<_>>();
+                f.make_format(Format::Tuple {
+                    fields: View::new(&fields),
+                })
+            },
+            Schema::Enum { variants, .. } => {
+                let fields = variants
+                    .values()
+                    .map(|variant| NamedFormat(f.make_symbol(&variant.name), variant.data.make_format(f)))
+                    .collect::<Vec<_>>();
+
+                f.make_format(Format::Variants {
+                    variant_index: Primitive::U64,
+                    variants: View::new(&fields),
+                })
+            },
+            Schema::Map { len, key, value } => {
+                let len = len.to_primitive();
+                let key = key.make_format(f);
+                let value = value.make_format(f);
+                f.make_format(Format::Map { len, key, value })
+            },
+            Schema::Never => f.make_format(Format::Unit),
+        }
+    }
+}

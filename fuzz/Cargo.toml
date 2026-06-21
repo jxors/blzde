@@ -1,0 +1,29 @@
+[package]
+name = "blzde-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+serde = { version = "1.0.219", features = ["derive"] }
+
+[dependencies.blzde]
+path = ".."
+
+[[bin]]
+name = "deserialize_smoke_test"
+path = "fuzz_targets/deserialize_smoke_test.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "roundtrip"
+path = "fuzz_targets/roundtrip.rs"
+test = false
+doc = false
+bench = false

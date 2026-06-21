@@ -1,0 +1,28 @@
+[package]
+name = "blzde"
+version = "0.1.0"
+edition = "2024"
+description = "A self-describing serde serialization format that deserializes big datastructures quickly"
+license = "MPL-2.0"
+repository = "https://github.com/jxors/blzde"
+readme = "README.md"
+
+[dependencies]
+bytemuck = { version = "1.25.0", features = ["derive"] }
+serde = "1.0.219"
+
+[dev-dependencies]
+criterion = "0.8.2"
+serde = { version = "1.0.219", features = ["derive"] }
+serde_bytes = "0.11.19"
+
+[[bench]]
+name = "basic"
+harness = false
+
+[profile.release]
+debug = true
+opt-level = 3
+
+[workspace]
+members = [ "fuzz" ]
