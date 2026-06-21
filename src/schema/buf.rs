@@ -9,24 +9,37 @@ use std::{
 use bytemuck::Pod;
 
 #[derive(Debug)]
-pub enum SchemaParseError {
-    TooBig(u32),
+pub enum FormatParseError {
     UnexpectedEnd,
-    Symbol(FromUtf8Error),
-    Io(std::io::Error),
     FormatReferenceOutOfBounds,
     Corrupt,
+}
+
+impl Display for FormatParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FormatParseError::UnexpectedEnd => write!(f, "schema format ended unexpectedly"),
+            FormatParseError::FormatReferenceOutOfBounds => write!(f, "format reference is out of bounds"),
+            FormatParseError::Corrupt => write!(f, "schema is corrupt"),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum SchemaParseError {
+    TooBig(u32),
+    Format(FormatParseError),
+    Io(std::io::Error),
+    Symbol(FromUtf8Error),
 }
 
 impl Display for SchemaParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             SchemaParseError::TooBig(bytes) => write!(f, "schema format is too big: {} MiB (maximum 128 MiB)", bytes >> 20),
-            SchemaParseError::UnexpectedEnd => write!(f, "schema format ended unexpectedly"),
             SchemaParseError::Io(e) => write!(f, "i/o error: {e}"),
             SchemaParseError::Symbol(e) => write!(f, "invalid symbol: {e}"),
-            SchemaParseError::FormatReferenceOutOfBounds => write!(f, "format reference is out of bounds"),
-            SchemaParseError::Corrupt => write!(f, "schema is corrupt"),
+            SchemaParseError::Format(e) => write!(f, "{e}"),
         }
     }
 }
@@ -43,6 +56,13 @@ impl From<FromUtf8Error> for SchemaParseError {
     }
 }
 
+impl From<FormatParseError> for SchemaParseError {
+    fn from(value: FormatParseError) -> Self {
+        SchemaParseError::Format(value)
+    }
+}
+
+
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
 pub struct FormatId(u32);
@@ -57,8 +77,8 @@ impl FormatId {
     }
 
     #[inline(always)]
-    fn read(data: &[u32]) -> Result<(FormatId, &[u32]), SchemaParseError> {
-        let (&id, data) = data.split_first().ok_or(SchemaParseError::UnexpectedEnd)?;
+    fn read(data: &[u32]) -> Result<(FormatId, &[u32]), FormatParseError> {
+        let (&id, data) = data.split_first().ok_or(FormatParseError::UnexpectedEnd)?;
         Ok((FormatId(id), data))
     }
 
@@ -102,15 +122,15 @@ impl Primitive {
     }
 
     #[inline(always)]
-    fn from_identifier(identifier: u32, data: &[u32]) -> Result<(Primitive, &[u32]), SchemaParseError> {
+    fn from_identifier(identifier: u32, data: &[u32]) -> Result<(Primitive, &[u32]), FormatParseError> {
         Ok(match identifier & 0x0f00_0000 {
             0x0000_0000 => (Primitive::U8, data),
             0x0100_0000 => (Primitive::U64, data),
             0x0200_0000 => {
-                let (&[low_offset, high_offset], data) = data.split_first_chunk().ok_or(SchemaParseError::UnexpectedEnd)?;
+                let (&[low_offset, high_offset], data) = data.split_first_chunk().ok_or(FormatParseError::UnexpectedEnd)?;
                 (Primitive::AdjustedU32(low_offset as u64 | ((high_offset as u64) << 32)), data)
             },
-            _ => return Err(SchemaParseError::Corrupt),
+            _ => return Err(FormatParseError::Corrupt),
         })
     }
 }
@@ -212,8 +232,8 @@ impl Format<'_> {
     }
 
     #[inline(always)]
-    fn read(data: &[u32]) -> Result<Format<'_>, SchemaParseError> {
-        let (&identifier, data) = data.split_first().ok_or(SchemaParseError::UnexpectedEnd)?;
+    fn read(data: &[u32]) -> Result<Format<'_>, FormatParseError> {
+        let (&identifier, data) = data.split_first().ok_or(FormatParseError::UnexpectedEnd)?;
         Ok(match identifier & 0xf000_0000 {
             0x0000_0000 => {
                 let (primitive, _) = Primitive::from_identifier(identifier, data)?;
@@ -257,7 +277,7 @@ impl Format<'_> {
                 Format::Variants { variant_index, variants }
             },
             0xA000_0000 => Format::U128,
-            _ => return Err(SchemaParseError::Corrupt),
+            _ => return Err(FormatParseError::Corrupt),
         })
     }
 }
@@ -280,16 +300,16 @@ impl<'a, T: Pod> View<'a, T> {
         data.extend_from_slice(bytemuck::cast_slice(self.0));
     }
 
-    fn from_identifier(identifier: u32, data: &'a [u32]) -> Result<(View<'a, T>, &'a [u32]), SchemaParseError> {
+    fn from_identifier(identifier: u32, data: &'a [u32]) -> Result<(View<'a, T>, &'a [u32]), FormatParseError> {
         let len = (identifier & 0xffff) as usize;
         if len > data.len() {
-            return Err(SchemaParseError::Corrupt);
+            return Err(FormatParseError::Corrupt);
         }
 
         let len = len * (std::mem::size_of::<T>() / 4);
         let (view, rest) = data
             .split_at_checked(len)
-            .ok_or(SchemaParseError::FormatReferenceOutOfBounds)?;
+            .ok_or(FormatParseError::FormatReferenceOutOfBounds)?;
         let view = bytemuck::cast_slice(view);
         Ok((View(view), rest))
     }
@@ -346,9 +366,9 @@ impl FormatBuffer {
         self.format(self.root)
     }
 
-    pub fn try_get_format(&self, id: FormatId) -> Result<Format<'_>, SchemaParseError> {
+    pub fn try_get_format(&self, id: FormatId) -> Result<Format<'_>, FormatParseError> {
         if id.0 as usize >= self.data.len() {
-            return Err(SchemaParseError::FormatReferenceOutOfBounds);
+            return Err(FormatParseError::FormatReferenceOutOfBounds);
         }
 
         Format::read(&self.data[id.0 as usize..])
@@ -405,21 +425,21 @@ impl FormatBuffer {
             rest
         };
 
-        let (&root, rest) = rest.split_first().ok_or(SchemaParseError::UnexpectedEnd)?;
-        let (&num_words, rest) = rest.split_first().ok_or(SchemaParseError::UnexpectedEnd)?;
+        let (&root, rest) = rest.split_first().ok_or(FormatParseError::UnexpectedEnd)?;
+        let (&num_words, rest) = rest.split_first().ok_or(FormatParseError::UnexpectedEnd)?;
         let (data, rest) = rest
             .split_at_checked(num_words as usize)
-            .ok_or(SchemaParseError::UnexpectedEnd)?;
-        let (&num_symbols, rest) = rest.split_first().ok_or(SchemaParseError::UnexpectedEnd)?;
+            .ok_or(FormatParseError::UnexpectedEnd)?;
+        let (&num_symbols, rest) = rest.split_first().ok_or(FormatParseError::UnexpectedEnd)?;
         let mut rest: &[u8] = bytemuck::cast_slice(rest);
         let symbols = (0..num_symbols)
             .map(|_| {
                 let len;
                 let data;
 
-                (len, rest) = rest.split_at_checked(4).ok_or(SchemaParseError::UnexpectedEnd)?;
+                (len, rest) = rest.split_at_checked(4).ok_or(FormatParseError::UnexpectedEnd)?;
                 let len = u32::from_le_bytes(len.try_into().unwrap());
-                (data, rest) = rest.split_at_checked(len as usize).ok_or(SchemaParseError::UnexpectedEnd)?;
+                (data, rest) = rest.split_at_checked(len as usize).ok_or(FormatParseError::UnexpectedEnd)?;
 
                 Ok(String::from_utf8(data.to_vec())?)
             })
