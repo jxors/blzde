@@ -130,6 +130,24 @@ fn test_all_primitives_roundtrip() {
 }
 
 #[test]
+fn test_u128_union() {
+    test_serde_roundtrip(&vec![
+        0u128,
+        1,
+        2,
+    ]);
+}
+
+#[test]
+fn test_i128_union() {
+    test_serde_roundtrip(&vec![
+        0i128,
+        1,
+        2,
+    ]);
+}
+
+#[test]
 fn test_map_roundtrip() {
     let mut m = HashMap::new();
     m.insert(vec![0u8, 1, 2], String::from("Hello, World"));

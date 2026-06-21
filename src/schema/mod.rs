@@ -197,6 +197,8 @@ impl Schema {
             (me @ Schema::Never, other) => *me = other,
             (_, Schema::Never) => (),
             (Schema::U64(a), Schema::U64(b)) => a.union_with(b),
+            (Schema::U128(a), Schema::U128(b)) => a.union_with(b),
+            (Schema::I128(a), Schema::I128(b)) => a.union_with(b),
             (Schema::I64(a), Schema::I64(b)) => a.union_with(b),
             (Schema::Str { len: len_a }, Schema::Str { len: len_b }) => len_a.union_with(len_b),
             (
