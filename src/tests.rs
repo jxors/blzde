@@ -51,6 +51,13 @@ struct Vector3 {
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+struct Vector3Rev {
+    z: u32,
+    y: u32,
+    x: u32,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 struct Vector2 {
     x: u32,
     y: u32,
@@ -94,6 +101,11 @@ fn test_field_remove() {
 #[test]
 fn test_default_field_added() {
     test_serde_transmute(&Vector2 { x: 10, y: 20 }, Vector3 { x: 10, y: 20, z: 0 });
+}
+
+#[test]
+fn test_fields_reordered() {
+    test_serde_transmute(&Vector3 { x: 10, y: 20, z: 30 }, Vector3Rev { x: 10, y: 20, z: 30 });
 }
 
 #[test]
