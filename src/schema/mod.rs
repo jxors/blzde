@@ -91,6 +91,13 @@ impl<T: Copy> ValueRange<T> {
             max_inclusive: val,
         }
     }
+    
+    fn new(min: T, max_inclusive: T) -> Self {
+        Self {
+            min,
+            max_inclusive,
+        }
+    }
 }
 
 impl ValueRange<u64> {
@@ -294,7 +301,7 @@ impl Schema {
                 }
 
                 (f.make_format(Format::Variants {
-                    variant_index: Primitive::U64,
+                    variant_index: ValueRange::new(0, variant_data.len() as u64 - 1).to_primitive(),
                     variants: View::new(variant_data),
                 }), storage)
             },
