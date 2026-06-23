@@ -1,4 +1,4 @@
-use crate::schema::formats::{Format, SchemaFormats, FormatId, NamedFormat, Primitive, SchemaParseError, View};
+use crate::schema::formats::{Format, FormatId, NamedFormat, Primitive, SchemaFormats, SchemaParseError, View};
 use serde::de::{self, EnumAccess, MapAccess, SeqAccess, VariantAccess};
 use std::{error::Error, fmt::Display, io::Read};
 
@@ -130,7 +130,7 @@ impl<'state, 'r, 'format, R: Read> Deserializer<'state, 'r, 'format, R> {
             format => Err(DeserializeError::UnexpectedFormat {
                 expected: "primitive",
                 found: format.make_static(),
-            })
+            }),
         }
     }
 
@@ -141,19 +141,14 @@ impl<'state, 'r, 'format, R: Read> Deserializer<'state, 'r, 'format, R> {
     }
 
     #[inline(always)]
-    fn struct_fields_equivalent(&mut self, expected_fields: &'static [&'static str], fields: View<'_, NamedFormat>) -> bool {
+    fn struct_fields_equivalent(&mut self, expected_fields: &'static [&'static str], fields: View<NamedFormat>) -> bool {
         let ptr = expected_fields.as_ptr();
         if self.state.field_equivalences[self.format.as_usize()] == ptr {
             return true;
         }
 
-        if fields.items().len() == expected_fields.len()
-            && fields
-                .items()
-                .iter()
-                .zip(expected_fields)
-                .all(|(a, b)| self.state.buf[a.0] == **b)
-        {
+        let items = fields.items();
+        if items.len() == expected_fields.len() && items.iter().zip(expected_fields).all(|(a, b)| self.state.buf[a.0] == **b) {
             self.state.field_equivalences[self.format.as_usize()] = ptr;
             return true;
         }
@@ -383,6 +378,7 @@ impl<'state, 'format, 'r, 'de, R: Read> de::Deserializer<'de> for Deserializer<'
                 found: self.format().make_static(),
             });
         };
+
         assert!(fields.items().is_empty());
         visitor.visit_unit()
     }
@@ -423,6 +419,7 @@ impl<'state, 'format, 'r, 'de, R: Read> de::Deserializer<'de> for Deserializer<'
                 found: self.format().make_static(),
             });
         };
+
         visitor.visit_seq(TupleFields {
             fields: fields.items(),
             state: &mut *self.state,

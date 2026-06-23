@@ -1,12 +1,13 @@
+use crate::schema::storage::FormatStorage;
+use bytemuck::Pod;
 use std::{
     collections::{HashSet, VecDeque},
     fmt::{Debug, Display},
     io::{Read, Write},
+    marker::PhantomData,
     ops::Index,
     string::FromUtf8Error,
 };
-
-use bytemuck::Pod;
 
 #[derive(Debug)]
 pub enum FormatParseError {
@@ -27,19 +28,25 @@ impl Display for FormatParseError {
 
 #[derive(Debug)]
 pub enum SchemaParseError {
-    TooBig(u32),
     Format(FormatParseError),
+
+    /// Occurs when an error occurs reading or writing from the input or output.
     Io(std::io::Error),
+
+    /// Occurs when a symbol fails to parse.
     Symbol(FromUtf8Error),
+
+    /// Occurs when an unknown version number is encountered.
+    UnknownVersion,
 }
 
 impl Display for SchemaParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            SchemaParseError::TooBig(bytes) => write!(f, "schema format is too big: {} MiB (maximum 128 MiB)", bytes >> 20),
             SchemaParseError::Io(e) => write!(f, "i/o error: {e}"),
             SchemaParseError::Symbol(e) => write!(f, "invalid symbol: {e}"),
             SchemaParseError::Format(e) => write!(f, "{e}"),
+            SchemaParseError::UnknownVersion => write!(f, "unknown schema version"),
         }
     }
 }
@@ -62,7 +69,6 @@ impl From<FormatParseError> for SchemaParseError {
     }
 }
 
-
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
 pub struct FormatId(u32);
@@ -73,19 +79,17 @@ impl Debug for FormatId {
     }
 }
 
-pub const MAX_SCHEMA_BYTE_SIZE: usize = 128 << 20;
-
 impl FormatId {
     pub const INVALID: FormatId = FormatId(u32::MAX);
 
-    fn write(&self, data: &mut Vec<u32>) {
-        data.push(self.0);
+    fn write(&self, data: &mut impl Write) -> std::io::Result<()> {
+        data.write_u32(self.0)
     }
 
     #[inline(always)]
-    fn read(data: &[u32]) -> Result<(FormatId, &[u32]), FormatParseError> {
-        let (&id, data) = data.split_first().ok_or(FormatParseError::UnexpectedEnd)?;
-        Ok((FormatId(id), data))
+    fn read(read: &mut impl Read) -> Result<FormatId, SchemaParseError> {
+        let id = read.read_u32()?;
+        Ok(FormatId(id))
     }
 
     pub fn as_usize(&self) -> usize {
@@ -109,40 +113,34 @@ pub enum Primitive {
 }
 
 impl Primitive {
-    fn identifier(&self) -> u32 {
-        match self {
-            Primitive::U8 => 0x0000_0000,
-            Primitive::U64 => 0x0100_0000,
-            Primitive::AdjustedU32(_) => 0x0200_0000,
-        }
-    }
+    fn write(&self, data: &mut impl Write) -> std::io::Result<()> {
+        data.write_u8(match self {
+            Primitive::U8 => 0,
+            Primitive::U64 => 1,
+            Primitive::AdjustedU32(_) => 2,
+        })?;
 
-    fn write(&self, data: &mut Vec<u32>) {
         match self {
             Primitive::U64 | Primitive::U8 => (),
-            Primitive::AdjustedU32(val) => {
-                data.push(*val as u32);
-                data.push((val >> 32) as u32);
-            },
+            Primitive::AdjustedU32(val) => data.write_u64(*val)?,
         }
+
+        Ok(())
     }
 
     #[inline(always)]
-    fn from_identifier(identifier: u32, data: &[u32]) -> Result<(Primitive, &[u32]), FormatParseError> {
-        Ok(match identifier & 0x0f00_0000 {
-            0x0000_0000 => (Primitive::U8, data),
-            0x0100_0000 => (Primitive::U64, data),
-            0x0200_0000 => {
-                let (&[low_offset, high_offset], data) = data.split_first_chunk().ok_or(FormatParseError::UnexpectedEnd)?;
-                (Primitive::AdjustedU32(low_offset as u64 | ((high_offset as u64) << 32)), data)
-            },
-            _ => return Err(FormatParseError::Corrupt),
+    fn read(read: &mut impl Read) -> Result<Primitive, SchemaParseError> {
+        Ok(match read.read_u8()? {
+            0 => Primitive::U8,
+            1 => Primitive::U64,
+            2 => Primitive::AdjustedU32(read.read_u64()?),
+            _ => return Err(FormatParseError::Corrupt.into()),
         })
     }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
-pub enum Format<'a> {
+pub enum Format<'buf> {
     Primitive(Primitive),
     String {
         len: Primitive,
@@ -159,7 +157,7 @@ pub enum Format<'a> {
         inner: FormatId,
     },
     Tuple {
-        fields: View<'a, FormatId>,
+        fields: View<'buf, FormatId>,
     },
     Map {
         len: Primitive,
@@ -167,32 +165,16 @@ pub enum Format<'a> {
         value: FormatId,
     },
     Struct {
-        fields: View<'a, NamedFormat>,
+        fields: View<'buf, NamedFormat>,
     },
     Variants {
         variant_index: Primitive,
-        variants: View<'a, NamedFormat>,
+        variants: View<'buf, NamedFormat>,
     },
     U128,
 }
 
-impl Format<'_> {
-    fn identifier(&self) -> u32 {
-        match self {
-            Format::Primitive(p) => 0x0000_0000 | p.identifier(),
-            Format::String { len } => 0x1000_0000 | len.identifier(),
-            Format::Bytes { len } => 0x2000_0000 | len.identifier(),
-            Format::Option { .. } => 0x3000_0000,
-            Format::Unit => 0x4000_0000,
-            Format::Sequence { len, .. } => 0x5000_0000 | len.identifier(),
-            Format::Tuple { fields } => 0x6000_0000 | fields.identifier(),
-            Format::Map { len, .. } => 0x7000_0000 | len.identifier(),
-            Format::Struct { fields } => 0x8000_0000 | fields.identifier(),
-            Format::Variants { variant_index, variants } => 0x9000_0000 | variant_index.identifier() | variants.identifier(),
-            Format::U128 => 0xA000_0000,
-        }
-    }
-
+impl<'buf> Format<'buf> {
     pub fn make_static(&self) -> Format<'static> {
         match *self {
             Format::Primitive(primitive) => Format::Primitive(primitive),
@@ -201,185 +183,160 @@ impl Format<'_> {
             Format::Option { inner } => Format::Option { inner },
             Format::Unit => Format::Unit,
             Format::Sequence { len, inner } => Format::Sequence { len, inner },
-            Format::Tuple { .. } => Format::Tuple { fields: View::new(&[]) },
+            Format::Tuple { .. } => Format::Tuple { fields: View::empty() },
             Format::Map { len, key, value } => Format::Map { len, key, value },
-            Format::Struct { .. } => Format::Struct { fields: View::new(&[]) },
+            Format::Struct { .. } => Format::Struct { fields: View::empty() },
             Format::Variants { variant_index, .. } => Format::Variants {
                 variant_index,
-                variants: View::new(&[]),
+                variants: View::empty(),
             },
             Format::U128 => Format::U128,
         }
     }
 
-    fn write(&self, data: &mut Vec<u32>) {
-        data.push(self.identifier());
+    fn write(&self, write: &mut impl Write) -> std::io::Result<()> {
+        write.write_u8(match self {
+            Format::Primitive(_) => 0,
+            Format::String { .. } => 1,
+            Format::Bytes { .. } => 2,
+            Format::Option { .. } => 3,
+            Format::Unit => 4,
+            Format::Sequence { .. } => 5,
+            Format::Tuple { .. } => 6,
+            Format::Map { .. } => 7,
+            Format::Struct { .. } => 8,
+            Format::Variants { .. } => 9,
+            Format::U128 => 10,
+        })?;
+
         match self {
-            Format::Primitive(len) | Format::String { len } | Format::Bytes { len } => len.write(data),
-            Format::Option { inner } => inner.write(data),
+            Format::Primitive(len) | Format::String { len } | Format::Bytes { len } => len.write(write)?,
+            Format::Option { inner } => inner.write(write)?,
             Format::Unit => (),
             Format::Sequence { len, inner } => {
-                len.write(data);
-                inner.write(data);
+                len.write(write)?;
+                inner.write(write)?;
             },
-            Format::Tuple { fields } => fields.write(data),
+            Format::Tuple { fields } => fields.write(write)?,
             Format::Map { len, key, value } => {
-                len.write(data);
-                key.write(data);
-                value.write(data);
+                len.write(write)?;
+                key.write(write)?;
+                value.write(write)?;
             },
-            Format::Struct { fields } => fields.write(data),
+            Format::Struct { fields } => fields.write(write)?,
             Format::Variants { variant_index, variants } => {
-                variant_index.write(data);
-                variants.write(data);
+                variant_index.write(write)?;
+                variants.write(write)?;
             },
             Format::U128 => (),
         }
+
+        Ok(())
     }
 
     #[inline(always)]
-    fn read(data: &[u32]) -> Result<(Format<'_>, &[u32]), FormatParseError> {
-        let (&identifier, data) = data.split_first().ok_or(FormatParseError::UnexpectedEnd)?;
-        Ok(match identifier & 0xf000_0000 {
-            0x0000_0000 => {
-                let (primitive, data) = Primitive::from_identifier(identifier, data)?;
-                (Format::Primitive(primitive), data)
+    fn read(read: &mut impl Read, storage: &'buf FormatStorage) -> Result<Format<'buf>, SchemaParseError> {
+        let kind = read.read_u8()?;
+        Ok(match kind {
+            0 => {
+                let primitive = Primitive::read(read)?;
+                Format::Primitive(primitive)
             },
-            0x1000_0000 => {
-                let (len, data) = Primitive::from_identifier(identifier, data)?;
-                (Format::String { len }, data)
+            1 => {
+                let len = Primitive::read(read)?;
+                Format::String { len }
             },
-            0x2000_0000 => {
-                let (len, data) = Primitive::from_identifier(identifier, data)?;
-                (Format::Bytes { len }, data)
+            2 => {
+                let len = Primitive::read(read)?;
+                Format::Bytes { len }
             },
-            0x3000_0000 => {
-                let (inner, data) = FormatId::read(data)?;
-                (Format::Option { inner }, data)
+            3 => {
+                let inner = FormatId::read(read)?;
+                Format::Option { inner }
             },
-            0x4000_0000 => (Format::Unit, data),
-            0x5000_0000 => {
-                let (len, data) = Primitive::from_identifier(identifier, data)?;
-                let (inner, data) = FormatId::read(data)?;
-                (Format::Sequence { len, inner }, data)
+            4 => Format::Unit,
+            5 => {
+                let len = Primitive::read(read)?;
+                let inner = FormatId::read(read)?;
+                Format::Sequence { len, inner }
             },
-            0x6000_0000 => {
-                let (fields, data) = View::from_identifier(identifier, data)?;
-                (Format::Tuple { fields }, data)
+            6 => {
+                let fields = View::read(read, storage)?;
+                Format::Tuple { fields }
             },
-            0x7000_0000 => {
-                let (len, data) = Primitive::from_identifier(identifier, data)?;
-                let (key, data) = FormatId::read(data)?;
-                let (value, data) = FormatId::read(data)?;
-                (Format::Map { len, key, value }, data)
+            7 => {
+                let len = Primitive::read(read)?;
+                let key = FormatId::read(read)?;
+                let value = FormatId::read(read)?;
+                Format::Map { len, key, value }
             },
-            0x8000_0000 => {
-                let (fields, data) = View::from_identifier(identifier, data)?;
-                (Format::Struct { fields }, data)
+            8 => {
+                let fields = View::read(read, storage)?;
+                Format::Struct { fields }
             },
-            0x9000_0000 => {
-                let (variant_index, data) = Primitive::from_identifier(identifier, data)?;
-                let (variants, data) = View::from_identifier(identifier, data)?;
-                (Format::Variants { variant_index, variants }, data)
+            9 => {
+                let variant_index = Primitive::read(read)?;
+                let variants = View::read(read, storage)?;
+                Format::Variants { variant_index, variants }
             },
-            0xA000_0000 => (Format::U128, data),
-            _ => return Err(FormatParseError::Corrupt),
+            10 => Format::U128,
+            _ => return Err(FormatParseError::Corrupt.into()),
         })
     }
 }
 
 #[derive(Copy, Clone, PartialEq)]
-pub struct View<'a, T>(&'a [T]);
+pub struct View<'buf, T>(&'buf [T], PhantomData<T>);
 
-impl<'a, T: Pod> View<'a, T> {
+impl<T: Pod> View<'static, T> {
     #[inline(always)]
-    pub fn new(data: &'a [T]) -> Self {
-        Self(data)
+    pub fn empty() -> Self {
+        Self(&[], PhantomData)
+    }
+}
+
+impl<'buf, T: Pod> View<'buf, T> {
+    #[inline(always)]
+    pub fn new(data: &'buf [T]) -> Self {
+        Self(data, PhantomData)
     }
 
     #[inline(always)]
-    pub fn items(&self) -> &'a [T] {
-        self.0
+    pub fn items(&self) -> &'buf [T] {
+        &self.0
     }
 
-    fn write(&self, data: &mut Vec<u32>) {
-        data.extend_from_slice(bytemuck::cast_slice(self.0));
+    fn write(&self, write: &mut impl Write) -> std::io::Result<()> {
+        let len = self.0.len();
+        write.write_u16(len.try_into().unwrap())?;
+        write.write_all(&bytemuck::cast_slice(&self.0))?;
+
+        Ok(())
     }
 
-    fn from_identifier(identifier: u32, data: &'a [u32]) -> Result<(View<'a, T>, &'a [u32]), FormatParseError> {
-        let len = (identifier & 0xffff) as usize;
-        if len > data.len() {
-            return Err(FormatParseError::Corrupt);
-        }
+    fn read(read: &mut impl Read, storage: &'buf FormatStorage) -> Result<View<'buf, T>, SchemaParseError> {
+        let len = read.read_u16()? as usize;
+        let data = storage.alloc::<T, SchemaParseError>(len, |_| {
+            let mut val = T::zeroed();
+            read.read_exact(bytemuck::cast_slice_mut(std::slice::from_mut(&mut val)))?;
+            Ok(val)
+        })?;
 
-        let len = len * (std::mem::size_of::<T>() / 4);
-        let (view, rest) = data
-            .split_at_checked(len)
-            .ok_or(FormatParseError::FormatReferenceOutOfBounds)?;
-        let view = bytemuck::cast_slice(view);
-        Ok((View(view), rest))
+        Ok(Self(data, PhantomData))
     }
 
-    fn identifier(&self) -> u32 {
-        self.0.len() as u32
+    pub fn len(&self) -> usize {
+        self.0.len()
     }
 }
 
 impl<T: Pod + Debug> Debug for View<'_, T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_list().entries(self.items()).finish()
+        f.debug_list().finish_non_exhaustive()
     }
 }
 
-#[derive(Clone, PartialEq)]
-pub struct FormatStorage {
-    data: Vec<u32>,
-}
-
-impl FormatStorage {
-    pub fn new(num_items: usize) -> Self {
-        Self {
-            data: vec![0; num_items],
-        }
-    }
-
-    pub fn read_from(mut r: impl Read) -> Result<Self, SchemaParseError> {
-        let total_words = {
-            let mut buf = [0; 4];
-            r.read_exact(&mut buf)?;
-            u32::from_le_bytes(buf)
-        };
-
-        if total_words as usize > MAX_SCHEMA_BYTE_SIZE / 4 {
-            return Err(SchemaParseError::TooBig(total_words.saturating_mul(4)));
-        }
-
-        let rest = {
-            let mut rest = vec![0u32; total_words as usize];
-            r.read_exact(bytemuck::cast_slice_mut(&mut rest))?;
-            rest
-        };
-
-        Ok(Self {
-            data: rest,
-        })
-    }
-
-    pub fn create_bump_alloc(&mut self) -> BumpAlloc<'_> {
-        BumpAlloc(&mut self.data[..])
-    }
-}
-
-pub struct BumpAlloc<'buf>(&'buf mut [u32]);
-
-impl<'buf> BumpAlloc<'buf> {
-    pub fn make_buffer(self, len: usize) -> (&'buf mut [u32], BumpAlloc<'buf>) {
-        let (first, rest) = self.0.split_at_mut(len);
-        (first, BumpAlloc(rest))
-    }
-}
-
-#[derive(Clone, PartialEq)]
+#[derive(PartialEq)]
 pub struct SchemaFormats<'buf> {
     formats: Vec<Format<'buf>>,
     symbols: Vec<String>,
@@ -387,6 +344,8 @@ pub struct SchemaFormats<'buf> {
 }
 
 impl<'buf> SchemaFormats<'buf> {
+    const SCHEMA_V0: u8 = 0;
+
     pub fn new() -> Self {
         Self {
             formats: Vec::new(),
@@ -415,12 +374,12 @@ impl<'buf> SchemaFormats<'buf> {
         FormatId(id as u32)
     }
 
-    pub fn root(&self) -> Format<'_> {
+    pub fn root(&self) -> Format<'buf> {
         assert_ne!(self.root, FormatId::INVALID);
         self.format(self.root)
     }
 
-    pub fn try_get_format(&self, id: FormatId) -> Result<Format<'_>, FormatParseError> {
+    pub fn try_get_format(&self, id: FormatId) -> Result<Format<'buf>, FormatParseError> {
         match self.formats.get(id.0 as usize) {
             Some(format) => Ok(*format),
             None => Err(FormatParseError::FormatReferenceOutOfBounds),
@@ -428,75 +387,57 @@ impl<'buf> SchemaFormats<'buf> {
     }
 
     #[inline(always)]
-    pub fn format(&self, id: FormatId) -> Format<'_> {
-        self.try_get_format(id).expect("format should have been fully validated after parsing")
+    pub fn format(&self, id: FormatId) -> Format<'buf> {
+        self.try_get_format(id)
+            .expect("format should have been fully validated after parsing")
     }
 
     pub fn root_id(&self) -> FormatId {
         self.root
     }
 
-    pub fn write_into(&self, w: &mut impl Write) -> Result<(), std::io::Error> {
-        let mut data = Vec::new();
+    pub fn write_into(&self, write: &mut impl Write) -> Result<(), std::io::Error> {
+        write.write_u8(Self::SCHEMA_V0)?;
+        write.write_u32(self.root.as_usize().try_into().unwrap())?;
+        write.write_u32(self.formats.len().try_into().unwrap())?;
         for format in self.formats.iter() {
-            format.write(&mut data);
-        }
-        
-        let total_byte_len = (3 + data.len()) * 4 + self.symbols.iter().map(|s| 4 + s.len()).sum::<usize>();
-
-        if total_byte_len > MAX_SCHEMA_BYTE_SIZE {
-            panic!("schema too large");
+            format.write(write)?;
         }
 
-        let padding = 7 & 0usize.wrapping_sub(total_byte_len);
-        debug_assert!((total_byte_len + padding).is_multiple_of(8));
-        w.write_all(&((total_byte_len + padding) as u32 / 4).to_le_bytes())?;
-        w.write_all(&(self.root.0 as u32).to_le_bytes())?;
-        w.write_all(&(data.len() as u32).to_le_bytes())?;
-        w.write_all(bytemuck::cast_slice(&data))?;
-        w.write_all(&(self.symbols.len() as u32).to_le_bytes())?;
+        write.write_u32(self.symbols.len().try_into().unwrap())?;
 
         for symbol in self.symbols.iter() {
-            w.write_all(&(symbol.len() as u32).to_le_bytes())?;
-            w.write_all(symbol.as_bytes())?;
+            write.write_u16(symbol.len().try_into().unwrap())?;
+            write.write_all(symbol.as_bytes())?;
         }
-
-        w.write_all(&[0; 32][..padding])?;
 
         Ok(())
     }
 
-    pub fn read_from(storage: &'buf FormatStorage) -> Result<SchemaFormats<'buf>, SchemaParseError> {
-        let rest = &storage.data[..];
-        let (&root, rest) = rest.split_first().ok_or(FormatParseError::UnexpectedEnd)?;
-        let (&num_words, rest) = rest.split_first().ok_or(FormatParseError::UnexpectedEnd)?;
-        let (mut data, rest) = rest
-            .split_at_checked(num_words as usize)
-            .ok_or(FormatParseError::UnexpectedEnd)?;
-        let (&num_symbols, rest) = rest.split_first().ok_or(FormatParseError::UnexpectedEnd)?;
-        let mut rest: &[u8] = bytemuck::cast_slice(rest);
+    pub fn read_from(read: &mut impl Read, storage: &'buf FormatStorage) -> Result<SchemaFormats<'buf>, SchemaParseError> {
+        let version = read.read_u8()?;
+        if version != Self::SCHEMA_V0 {
+            return Err(SchemaParseError::UnknownVersion);
+        }
+        let root = read.read_u32()?;
+        let num_formats = read.read_u32()?;
+        let formats = (0..num_formats)
+            .map(|_| Format::read(read, storage))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let num_symbols = read.read_u32()?;
         let symbols = (0..num_symbols)
             .map(|_| {
-                let len;
-                let data;
+                let len = read.read_u16()?;
+                let mut data = vec![0; len as usize];
+                read.read_exact(&mut data)?;
 
-                (len, rest) = rest.split_at_checked(4).ok_or(FormatParseError::UnexpectedEnd)?;
-                let len = u32::from_le_bytes(len.try_into().unwrap());
-                (data, rest) = rest.split_at_checked(len as usize).ok_or(FormatParseError::UnexpectedEnd)?;
-
-                Ok(String::from_utf8(data.to_vec())?)
+                Ok(String::from_utf8(data)?)
             })
             .collect::<Result<_, SchemaParseError>>()?;
 
-        let mut formats = Vec::new();
-        while !data.is_empty() {
-            let (format, rest) = Format::read(data)?;
-            data = rest;
-            formats.push(format);
-        }
-
         let result = Self {
-            formats: formats.to_vec(), // TODO
+            formats,
             root: FormatId(root),
             symbols,
         };
@@ -570,6 +511,64 @@ impl<'buf> SchemaFormats<'buf> {
     }
 }
 
+trait ReadExt {
+    fn read_u64(&mut self) -> std::io::Result<u64>;
+    fn read_u32(&mut self) -> std::io::Result<u32>;
+    fn read_u16(&mut self) -> std::io::Result<u16>;
+    fn read_u8(&mut self) -> std::io::Result<u8>;
+}
+
+impl<R: Read> ReadExt for R {
+    fn read_u64(&mut self) -> std::io::Result<u64> {
+        let mut buf = [0; 8];
+        self.read_exact(&mut buf)?;
+        Ok(u64::from_le_bytes(buf))
+    }
+
+    fn read_u32(&mut self) -> std::io::Result<u32> {
+        let mut buf = [0; 4];
+        self.read_exact(&mut buf)?;
+        Ok(u32::from_le_bytes(buf))
+    }
+
+    fn read_u16(&mut self) -> std::io::Result<u16> {
+        let mut buf = [0; 2];
+        self.read_exact(&mut buf)?;
+        Ok(u16::from_le_bytes(buf))
+    }
+
+    fn read_u8(&mut self) -> std::io::Result<u8> {
+        let mut buf = [0; 1];
+        self.read_exact(&mut buf)?;
+        Ok(buf[0])
+    }
+}
+
+trait WriteExt {
+    fn write_u64(&mut self, val: u64) -> std::io::Result<()>;
+    fn write_u32(&mut self, val: u32) -> std::io::Result<()>;
+    fn write_u16(&mut self, val: u16) -> std::io::Result<()>;
+    fn write_u8(&mut self, val: u8) -> std::io::Result<()>;
+}
+
+impl<W: Write> WriteExt for W {
+    fn write_u64(&mut self, val: u64) -> std::io::Result<()> {
+        self.write_all(&val.to_le_bytes())
+    }
+
+    fn write_u32(&mut self, val: u32) -> std::io::Result<()> {
+        self.write_all(&val.to_le_bytes())
+    }
+
+    fn write_u16(&mut self, val: u16) -> std::io::Result<()> {
+        self.write_all(&val.to_le_bytes())
+    }
+
+    fn write_u8(&mut self, val: u8) -> std::io::Result<()> {
+        self.write_all(&val.to_le_bytes())
+    }
+}
+
 impl Debug for SchemaFormats<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut f = f.debug_map();
@@ -632,7 +631,7 @@ impl Index<SymbolId> for SchemaFormats<'_> {
 
 #[cfg(test)]
 mod tests {
-    use crate::schema::formats::{FormatStorage, Format, SchemaFormats};
+    use crate::schema::formats::{Format, FormatStorage, SchemaFormats};
     use std::io::Cursor;
 
     #[test]
@@ -653,9 +652,8 @@ mod tests {
         println!("Format: {format:#?}");
 
         println!("Serialized into: {bytes:02X?}");
-        println!("As words: {:08X?}", bytemuck::cast_slice::<_, u32>(&bytes));
-        let storage = FormatStorage::read_from(&mut Cursor::new(&bytes)).unwrap();
-        let new_format = SchemaFormats::read_from(&storage).unwrap();
+        let storage = FormatStorage::new();
+        let new_format = SchemaFormats::read_from(&mut Cursor::new(&bytes), &storage).unwrap();
 
         assert_eq!(*format, new_format);
     }

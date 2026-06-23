@@ -4,15 +4,17 @@
 //! Serializing takes two steps: first, a schema format specific to the provided data is computed.
 //! Then, the data is serialized according to this format.
 //! This allows the actual data to be serialized without any identifiers, type markers, or other non-data.
-//! 
+//!
 //! To serialize data, use [`to_vec`] or [`into_writer`].
 //! To deserialize, use [`from_slice`] or [`from_reader`].
-//! 
+//!
 //! There are currently no other configuration options.
 //! ```
 
 use crate::{
-    de::{Deserializer, State}, schema::{Schema, formats::{FormatStorage, SchemaFormats}}, ser::Serializer,
+    de::{Deserializer, State},
+    schema::{Schema, formats::SchemaFormats, storage::FormatStorage},
+    ser::Serializer,
 };
 use serde::{Deserialize, Serialize};
 use std::io::{Cursor, Read, Write};
@@ -30,13 +32,13 @@ mod tests;
 const MAGIC_NUMBER: u32 = 0x011B_115au32;
 
 /// Serializes `value` into `writer`.
-/// 
+///
 /// Writes are not buffered.
 /// You should wrap `writer` in a [`std::io::BufWriter`] if this is desired.
 pub fn into_writer<T: Serialize>(value: &T, mut writer: impl Write) -> Result<(), SerializeError> {
     let schema = Schema::of(&value);
-    let mut storage = schema.make_format_storage();
-    let format = schema.to_format(storage.create_bump_alloc());
+    let mut storage = FormatStorage::new();
+    let format = schema.to_format(&mut storage);
 
     writer.write_all(&MAGIC_NUMBER.to_le_bytes())?;
     format.write_into(&mut writer)?;
@@ -48,10 +50,10 @@ pub fn into_writer<T: Serialize>(value: &T, mut writer: impl Write) -> Result<()
 }
 
 /// Deserializes a `T` from `reader`.
-/// 
+///
 /// Reads are not buffered.
 /// You should wrap `reader` in a [`std::io::BufReader`] if this is desired.
-/// 
+///
 /// The reader is not guaranteed to be placed exactly at the end of the serialized data
 /// when this function terminates.
 /// When provided with a stream longer than the original serialized data,
@@ -63,8 +65,8 @@ pub fn from_reader<'de, T: Deserialize<'de>>(mut reader: impl Read) -> Result<T,
         return Err(DeserializeError::Custom(String::from("invalid magic number")));
     }
 
-    let storage = FormatStorage::read_from(&mut reader)?;
-    let format = SchemaFormats::read_from(&storage)?;
+    let format_storage = FormatStorage::new();
+    let format = SchemaFormats::read_from(&mut reader, &format_storage)?;
     if format.is_empty() {
         return Err(DeserializeError::EmptyFormat);
     }
@@ -82,7 +84,7 @@ pub fn to_vec<T: Serialize>(value: &T) -> Vec<u8> {
 }
 
 /// Deserializes a `T` from `slice`.
-/// 
+///
 /// Extra bytes are silently ignored.
 pub fn from_slice<'de, T: Deserialize<'de>>(slice: &[u8]) -> Result<T, DeserializeError> {
     from_reader(Cursor::new(slice))

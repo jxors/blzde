@@ -1,4 +1,4 @@
-use crate::schema::formats::{Format, SchemaFormats, FormatId, NamedFormat, Primitive};
+use crate::schema::formats::{Format, FormatId, NamedFormat, Primitive, SchemaFormats};
 use serde::ser::{self, SerializeTuple, SerializeTupleVariant};
 use std::{error::Error, fmt::Display, io::Write};
 

@@ -3,11 +3,14 @@ use std::{collections::HashMap, fmt::Display};
 use serde::Serialize;
 
 use crate::schema::{
-    formats::{BumpAlloc, FormatStorage, Format, FormatId, NamedFormat, Primitive, SchemaFormats, View}, ser::SchemaSerializer,
+    formats::{Format, FormatId, NamedFormat, Primitive, SchemaFormats},
+    ser::SchemaSerializer,
+    storage::FormatStorage,
 };
 
 pub mod formats;
 mod ser;
+pub mod storage;
 
 #[derive(Clone, Debug)]
 pub struct UnionError {
@@ -41,38 +44,26 @@ pub enum VariantData {
 }
 
 impl VariantData {
-    fn make_format<'buf>(&self, f: &mut SchemaFormats<'buf>, storage: BumpAlloc<'buf>) -> (FormatId, BumpAlloc<'buf>) {
+    fn make_format<'buf>(&self, f: &mut SchemaFormats<'buf>, storage: &'buf FormatStorage) -> FormatId {
         match self {
-            VariantData::Unit => (f.make_format(Format::Unit), storage),
+            VariantData::Unit => f.make_format(Format::Unit),
             VariantData::Tuple { fields } => {
-                let (field_data, mut storage) = storage.make_buffer(fields.len());
-                let field_data = bytemuck::cast_slice_mut(field_data);
+                let fields = fields.iter().map(|field| field.make_format(f, storage)).collect::<Vec<_>>();
+                let fields = storage.make_view(&fields);
 
-                debug_assert_eq!(field_data.len(), fields.len());
-
-                for (field, field_data) in fields.iter().zip(field_data.iter_mut()) {
-                    (*field_data, storage) = field.make_format(f, storage);
-                }
-
-                (f.make_format(Format::Tuple {
-                    fields: View::new(field_data),
-                }), storage)
+                f.make_format(Format::Tuple { fields })
             },
             VariantData::Struct { fields } => {
-                let (field_data, mut storage) = storage.make_buffer(fields.len() * 2);
-                let field_data = bytemuck::cast_slice_mut(field_data);
+                let fields = fields
+                    .iter()
+                    .map(|field| {
+                        let format = field.value.make_format(f, storage);
+                        NamedFormat(f.make_symbol(&field.name), format)
+                    })
+                    .collect::<Vec<_>>();
+                let fields = storage.make_view(&fields);
 
-                debug_assert_eq!(field_data.len(), fields.len());
-
-                for (field, field_data) in fields.iter().zip(field_data.iter_mut()) {
-                    let format;
-                    (format, storage) = field.value.make_format(f, storage);
-                    *field_data = NamedFormat(f.make_symbol(&field.name), format);
-                }
-
-                (f.make_format(Format::Struct {
-                    fields: View::new(field_data),
-                }), storage)
+                f.make_format(Format::Struct { fields })
             },
         }
     }
@@ -91,12 +82,9 @@ impl<T: Copy> ValueRange<T> {
             max_inclusive: val,
         }
     }
-    
+
     fn new(min: T, max_inclusive: T) -> Self {
-        Self {
-            min,
-            max_inclusive,
-        }
+        Self { min, max_inclusive }
     }
 }
 
@@ -188,13 +176,9 @@ impl Schema {
         result
     }
 
-    pub fn make_format_storage(&self) -> FormatStorage {
-        FormatStorage::new(self.storage_size_needed())
-    }
-
-    pub fn to_format<'buf>(&self, storage: BumpAlloc<'buf>) -> SchemaFormats<'buf> {
+    pub fn to_format<'buf>(&self, storage: &'buf mut FormatStorage) -> SchemaFormats<'buf> {
         let mut formats = SchemaFormats::new();
-        let (root, _) = self.make_format(&mut formats, storage);
+        let root = self.make_format(&mut formats, storage);
         formats.set_root(root);
         formats
     }
@@ -243,94 +227,65 @@ impl Schema {
         self
     }
 
-    pub fn make_format<'buf>(&self, f: &mut SchemaFormats<'buf>, storage: BumpAlloc<'buf>) -> (FormatId, BumpAlloc<'buf>) {
+    pub fn make_format<'buf>(&self, f: &mut SchemaFormats<'buf>, storage: &'buf FormatStorage) -> FormatId {
         match self {
             Schema::Struct { fields, .. } => {
-                let (field_data, mut storage) = storage.make_buffer(fields.len() * 2);
-                let field_data = bytemuck::cast_slice_mut(field_data);
+                let fields = fields
+                    .iter()
+                    .map(|field| {
+                        let format = field.value.make_format(f, storage);
+                        NamedFormat(f.make_symbol(&field.name), format)
+                    })
+                    .collect::<Vec<_>>();
+                let fields = storage.make_view(&fields);
 
-                for (field, field_data) in fields.iter().zip(field_data.iter_mut()) {
-                    let format;
-                    (format, storage) = field.value.make_format(f, storage);
-                    *field_data = NamedFormat(f.make_symbol(&field.name), format);
-                }
-
-                (f.make_format(Format::Struct {
-                    fields: View::new(field_data),
-                }), storage)
+                f.make_format(Format::Struct { fields })
             },
-            Schema::U64(range) => (f.make_format(Format::Primitive(range.to_primitive())), storage),
-            Schema::I64(range) => (f.make_format(Format::Primitive(ValueRange::<u64>::from(*range).to_primitive())), storage),
-            Schema::U128(_) | Schema::I128(_) => (f.make_format(Format::U128), storage),
+            Schema::U64(range) => f.make_format(Format::Primitive(range.to_primitive())),
+            Schema::I64(range) => f.make_format(Format::Primitive(ValueRange::<u64>::from(*range).to_primitive())),
+            Schema::U128(_) | Schema::I128(_) => f.make_format(Format::U128),
             Schema::Seq { len, item } => {
-                let (inner, storage) = item.make_format(f, storage);
-                (f.make_format(Format::Sequence {
+                let inner = item.make_format(f, storage);
+                f.make_format(Format::Sequence {
                     len: len.to_primitive(),
                     inner,
-                }), storage)
+                })
             },
-            Schema::Bytes { len } => (f.make_format(Format::Bytes { len: len.to_primitive() }), storage),
+            Schema::Bytes { len } => f.make_format(Format::Bytes { len: len.to_primitive() }),
             Schema::Option { item } => {
-                let (inner, storage) = item.make_format(f, storage);
-                (f.make_format(Format::Option { inner }), storage)
+                let inner = item.make_format(f, storage);
+                f.make_format(Format::Option { inner })
             },
-            Schema::Str { len } => (f.make_format(Format::String { len: len.to_primitive() }), storage),
-            Schema::Unit => (f.make_format(Format::Unit), storage),
+            Schema::Str { len } => f.make_format(Format::String { len: len.to_primitive() }),
+            Schema::Unit => f.make_format(Format::Unit),
             Schema::TupleStruct { fields, .. } | Schema::Tuple { fields } => {
-                let (field_data, mut storage) = storage.make_buffer(fields.len());
-                let field_data = bytemuck::cast_slice_mut(field_data);
+                let fields = fields.iter().map(|field| field.make_format(f, storage)).collect::<Vec<_>>();
+                let fields = storage.make_view(&fields);
 
-                for (field, field_data) in fields.iter().zip(field_data.iter_mut()) {
-                    (*field_data, storage) = field.make_format(f, storage);
-                }
-
-                (f.make_format(Format::Tuple {
-                    fields: View::new(field_data),
-                }), storage)
+                f.make_format(Format::Tuple { fields })
             },
             Schema::Enum { variants, .. } => {
-                let (field_data, mut storage) = storage.make_buffer(variants.len() * 2);
-                let variant_data = bytemuck::cast_slice_mut(field_data);
+                let variants = variants
+                    .values()
+                    .map(|variant| {
+                        let format = variant.data.make_format(f, storage);
+                        NamedFormat(f.make_symbol(&variant.name), format)
+                    })
+                    .collect::<Vec<_>>();
+                let variants = storage.make_view(&variants);
 
-                debug_assert_eq!(variant_data.len(), variants.len());
-
-                for ((_, variant), field_data) in variants.iter().zip(variant_data.iter_mut()) {
-                    let format;
-                    (format, storage) = variant.data.make_format(f, storage);
-                    *field_data = NamedFormat(f.make_symbol(&variant.name), format);
-                }
-
-                (f.make_format(Format::Variants {
-                    variant_index: ValueRange::new(0, variant_data.len() as u64 - 1).to_primitive(),
-                    variants: View::new(variant_data),
-                }), storage)
+                f.make_format(Format::Variants {
+                    variant_index: ValueRange::new(0, variants.len() as u64 - 1).to_primitive(),
+                    variants,
+                })
             },
             Schema::Map { len, key, value } => {
                 let len = len.to_primitive();
-                let (key, storage) = key.make_format(f, storage);
-                let (value, storage) = value.make_format(f, storage);
-                (f.make_format(Format::Map { len, key, value }), storage)
+                let key = key.make_format(f, storage);
+                let value = value.make_format(f, storage);
+                f.make_format(Format::Map { len, key, value })
             },
-            Schema::Never => (f.make_format(Format::Unit), storage),
-        }
-    }
-    
-    fn storage_size_needed(&self) -> usize {
-        match self {
-            Schema::Unit | Schema::U64(_) | Schema::I64(_) | Schema::U128(_) 
-                | Schema::I128(_) | Schema::Bytes { .. } | Schema::Str { .. }
-                | Schema::Never => 0,
-            Schema::Struct { fields, .. } => {
-                fields.len() * 2 + fields.iter().map(|f| f.value.storage_size_needed()).sum::<usize>()
-            },
-            Schema::Option { item } | Schema::Seq { item, .. } => item.storage_size_needed(),
-            Schema::Map { key, value, .. } => key.storage_size_needed() + value.storage_size_needed(),
-            Schema::Tuple { fields } | Schema::TupleStruct { fields, .. } => fields.len() + fields.iter().map(|f| f.storage_size_needed()).sum::<usize>(),
-            Schema::Enum { variants, .. } => variants.len() * 2 + variants.values().map(|v| match &v.data {
-                VariantData::Unit => 0,
-                VariantData::Tuple { fields } => fields.len() + fields.iter().map(|f| f.storage_size_needed()).sum::<usize>(),
-                VariantData::Struct { fields } => fields.len() * 2 + fields.iter().map(|f| f.value.storage_size_needed()).sum::<usize>(),
-            }).sum::<usize>(),
+            Schema::Never => f.make_format(Format::Unit),
         }
     }
 }

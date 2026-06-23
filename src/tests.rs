@@ -1,6 +1,6 @@
-use crate::{de::Deserializer, schema::{Schema, formats::FormatStorage}, ser::Serializer};
+use crate::schema::{Schema, storage::FormatStorage};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use std::{collections::HashMap, fmt::Debug, io::Cursor};
+use std::{collections::HashMap, fmt::Debug};
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 struct AllPrimitives {
@@ -131,20 +131,12 @@ fn test_all_primitives_roundtrip() {
 
 #[test]
 fn test_u128_union() {
-    test_serde_roundtrip(&vec![
-        0u128,
-        1,
-        2,
-    ]);
+    test_serde_roundtrip(&vec![0u128, 1, 2]);
 }
 
 #[test]
 fn test_i128_union() {
-    test_serde_roundtrip(&vec![
-        0i128,
-        1,
-        2,
-    ]);
+    test_serde_roundtrip(&vec![0i128, 1, 2]);
 }
 
 #[test]
@@ -245,8 +237,8 @@ fn test_enum() {
 
 fn test_serde_roundtrip<T: Debug + Serialize + DeserializeOwned + PartialEq>(val: &T) {
     let schema = Schema::of(&val);
-    let mut storage = schema.make_format_storage();
-    let format = schema.to_format(storage.create_bump_alloc());
+    let mut storage = FormatStorage::new();
+    let format = schema.to_format(&mut storage);
     println!("Format: {:#?}", format);
 
     let output = crate::to_vec(val);
