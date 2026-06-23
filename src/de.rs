@@ -102,6 +102,13 @@ impl<'state, 'r, 'format, R: Read> Deserializer<'state, 'r, 'format, R> {
         Ok(u32::from_le_bytes(buf))
     }
 
+    fn read_u16(&mut self) -> std::io::Result<u16> {
+        let mut buf = [0; 2];
+        self.state.read.read_exact(&mut buf)?;
+
+        Ok(u16::from_le_bytes(buf))
+    }
+
     fn read_u8(&mut self) -> std::io::Result<u8> {
         let mut buf = [0; 1];
         self.state.read.read_exact(&mut buf)?;
@@ -113,6 +120,8 @@ impl<'state, 'r, 'format, R: Read> Deserializer<'state, 'r, 'format, R> {
     fn read_oob_primitive(&mut self, primitive: Primitive) -> std::io::Result<u64> {
         Ok(match primitive {
             Primitive::U8 => self.read_u8()? as u64,
+            Primitive::U16 => self.read_u16()? as u64,
+            Primitive::U32 => self.read_u32()? as u64,
             Primitive::U64 => self.read_u64()?,
             Primitive::AdjustedU32(offset) => (self.read_u32()? as u64).wrapping_add(offset),
         })

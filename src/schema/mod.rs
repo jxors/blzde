@@ -95,8 +95,12 @@ impl ValueRange<u64> {
     }
 
     fn to_primitive(&self) -> Primitive {
-        if self.min <= 0xff && self.max_inclusive <= 0xff {
+        if self.min <= u8::MAX as u64 && self.max_inclusive <= u8::MAX as u64 {
             Primitive::U8
+        } else if self.min <= u16::MAX as u64 && self.max_inclusive <= u16::MAX as u64 {
+            Primitive::U16
+        } else if self.min <= u32::MAX as u64 && self.max_inclusive <= u32::MAX as u64 {
+            Primitive::U32
         } else if self.size() <= 32 {
             Primitive::AdjustedU32(self.min)
         } else {

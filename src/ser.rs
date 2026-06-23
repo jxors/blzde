@@ -68,6 +68,8 @@ impl<'r, 'format, W: Write> Serializer<'r, 'format, W> {
     fn write_primitive(&mut self, primitive: Primitive, v: u64) -> std::io::Result<()> {
         match primitive {
             Primitive::U8 => self.writer.write_all(&[v as u8])?,
+            Primitive::U16 => self.writer.write_all(&(v as u16).to_le_bytes())?,
+            Primitive::U32 => self.writer.write_all(&(v as u32).to_le_bytes())?,
             Primitive::U64 => self.writer.write_all(&v.to_le_bytes())?,
             Primitive::AdjustedU32(offset) => {
                 let v = v.wrapping_sub(offset);

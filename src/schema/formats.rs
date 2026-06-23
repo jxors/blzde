@@ -108,6 +108,8 @@ pub struct SymbolId(u32);
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Primitive {
     U8,
+    U16,
+    U32,
     U64,
     AdjustedU32(u64),
 }
@@ -116,12 +118,14 @@ impl Primitive {
     fn write(&self, data: &mut impl Write) -> std::io::Result<()> {
         data.write_u8(match self {
             Primitive::U8 => 0,
-            Primitive::U64 => 1,
-            Primitive::AdjustedU32(_) => 2,
+            Primitive::U16 => 1,
+            Primitive::U32 => 2,
+            Primitive::U64 => 3,
+            Primitive::AdjustedU32(_) => 4,
         })?;
 
         match self {
-            Primitive::U64 | Primitive::U8 => (),
+            Primitive::U64 | Primitive::U32 | Primitive::U16 | Primitive::U8 => (),
             Primitive::AdjustedU32(val) => data.write_u64(*val)?,
         }
 
@@ -132,8 +136,10 @@ impl Primitive {
     fn read(read: &mut impl Read) -> Result<Primitive, SchemaParseError> {
         Ok(match read.read_u8()? {
             0 => Primitive::U8,
-            1 => Primitive::U64,
-            2 => Primitive::AdjustedU32(read.read_u64()?),
+            1 => Primitive::U16,
+            2 => Primitive::U32,
+            3 => Primitive::U64,
+            4 => Primitive::AdjustedU32(read.read_u64()?),
             _ => return Err(FormatParseError::Corrupt.into()),
         })
     }
