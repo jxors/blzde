@@ -2,6 +2,33 @@ use crate::schema::formats::{Format, FormatId, NamedFormat, Primitive, SchemaFor
 use serde::de::{self, EnumAccess, MapAccess, SeqAccess, VariantAccess};
 use std::{error::Error, fmt::Display, io::Read};
 
+macro_rules! wrap {
+    ($name:ident => $format:expr) => {
+        struct $name;
+
+        impl<'format> ProvideFormat<'format> for $name {
+            #[inline(always)]
+            fn format<R>(&self, _: &State<'_, 'format, R>) -> Format<'format> {
+                $format
+            }
+
+            #[inline(always)]
+            fn id(&self) -> FormatId {
+                unreachable!()
+            }
+        }
+
+        impl<'de, 'format> Wrapper<'de, 'format> for $name {
+            #[inline(always)]
+            fn deserialize_seed<R: Read, T: de::DeserializeSeed<'de>>(
+                &self, seed: T, state: &mut State<'_, 'format, R>,
+            ) -> Result<T::Value, DeserializeError> {
+                seed.deserialize(Deserializer { format: $name, state })
+            }
+        }
+    };
+}
+
 #[derive(Debug)]
 pub enum DeserializeError {
     UnexpectedFormat { expected: &'static str, found: Format<'static> },
@@ -68,22 +95,65 @@ impl<'r, 'format, R: Read> State<'r, 'format, R> {
     }
 }
 
-pub struct Deserializer<'state, 'r, 'format, R> {
-    format: FormatId,
+pub trait ProvideFormat<'format> {
+    fn format<R>(&self, state: &State<'_, 'format, R>) -> Format<'format>;
+    fn id(&self) -> FormatId;
+}
+
+impl<'format> ProvideFormat<'format> for FormatId {
+    #[inline(always)]
+    fn format<R>(&self, state: &State<'_, 'format, R>) -> Format<'format> {
+        state.buf.format(*self)
+    }
+
+    #[inline(always)]
+    fn id(&self) -> FormatId {
+        *self
+    }
+}
+
+impl<'format> ProvideFormat<'format> for Format<'format> {
+    #[inline(always)]
+    fn format<R>(&self, _state: &State<'_, 'format, R>) -> Format<'format> {
+        *self
+    }
+
+    #[inline(always)]
+    fn id(&self) -> FormatId {
+        unreachable!()
+    }
+}
+
+impl<'format> ProvideFormat<'format> for (Format<'format>, FormatId) {
+    #[inline(always)]
+    fn format<R>(&self, _state: &State<'_, 'format, R>) -> Format<'format> {
+        self.0
+    }
+
+    #[inline(always)]
+    fn id(&self) -> FormatId {
+        self.1
+    }
+}
+
+pub struct Deserializer<'state, 'r, 'format, R, P> {
+    format: P,
     state: &'state mut State<'r, 'format, R>,
 }
 
-impl<'state, 'r, 'format, R: Read> Deserializer<'state, 'r, 'format, R> {
+impl<'state, 'r, 'format, R: Read> Deserializer<'state, 'r, 'format, R, FormatId> {
     pub fn new(state: &'state mut State<'r, 'format, R>) -> Self {
         Self {
             format: state.buf.root_id(),
             state,
         }
     }
+}
 
-    fn lookup(self, format: FormatId) -> Self {
-        Self {
-            format,
+impl<'state, 'r, 'format, R: Read, P: ProvideFormat<'format>> Deserializer<'state, 'r, 'format, R, P> {
+    fn lookup(self, format_id: FormatId) -> Deserializer<'state, 'r, 'format, R, FormatId> {
+        Deserializer {
+            format: format_id,
             state: &mut *self.state,
         }
     }
@@ -129,7 +199,7 @@ impl<'state, 'r, 'format, R: Read> Deserializer<'state, 'r, 'format, R> {
 
     #[inline(always)]
     fn format(&self) -> Format<'format> {
-        self.state.buf.format(self.format)
+        self.format.format(&self.state)
     }
 
     #[inline(always)]
@@ -152,13 +222,13 @@ impl<'state, 'r, 'format, R: Read> Deserializer<'state, 'r, 'format, R> {
     #[inline(always)]
     fn struct_fields_equivalent(&mut self, expected_fields: &'static [&'static str], fields: View<NamedFormat>) -> bool {
         let ptr = expected_fields.as_ptr();
-        if self.state.field_equivalences[self.format.as_usize()] == ptr {
+        if self.state.field_equivalences[self.format.id().as_usize()] == ptr {
             return true;
         }
 
         let items = fields.items();
         if items.len() == expected_fields.len() && items.iter().zip(expected_fields).all(|(a, b)| self.state.buf[a.0] == **b) {
-            self.state.field_equivalences[self.format.as_usize()] = ptr;
+            self.state.field_equivalences[self.format.id().as_usize()] = ptr;
             return true;
         }
 
@@ -166,7 +236,9 @@ impl<'state, 'r, 'format, R: Read> Deserializer<'state, 'r, 'format, R> {
     }
 }
 
-impl<'state, 'format, 'r, 'de, R: Read> de::Deserializer<'de> for Deserializer<'state, 'r, 'format, R> {
+impl<'state, 'format, 'r, 'de, R: Read, P: ProvideFormat<'format>> de::Deserializer<'de>
+    for Deserializer<'state, 'r, 'format, R, P>
+{
     type Error = DeserializeError;
     #[inline]
     fn deserialize_any<V>(self, visitor: V) -> Result<V::Value, Self::Error>
@@ -433,13 +505,47 @@ impl<'state, 'format, 'r, 'de, R: Read> de::Deserializer<'de> for Deserializer<'
                 found: self.format().make_static(),
             });
         };
-        let len = self.read_oob_primitive(len)?;
 
-        visitor.visit_seq(SizedSequence {
-            format: inner,
-            state: &mut *self.state,
-            remaining: len as usize,
-        })
+        let len = self.read_oob_primitive(len)?;
+        match self.state.buf.format(inner) {
+            Format::Primitive(Primitive::U8) => {
+                wrap! { Wrap => Format::Primitive(Primitive::U8) };
+                visitor.visit_seq(SizedSequence {
+                    wrapper: Wrap,
+                    state: &mut *self.state,
+                    remaining: len as usize,
+                })
+            },
+            Format::Primitive(Primitive::U16) => {
+                wrap! { Wrap => Format::Primitive(Primitive::U16) };
+                visitor.visit_seq(SizedSequence {
+                    wrapper: Wrap,
+                    state: &mut *self.state,
+                    remaining: len as usize,
+                })
+            },
+            Format::Primitive(Primitive::U32) => {
+                wrap! { Wrap => Format::Primitive(Primitive::U32) };
+                visitor.visit_seq(SizedSequence {
+                    wrapper: Wrap,
+                    state: &mut *self.state,
+                    remaining: len as usize,
+                })
+            },
+            Format::Primitive(Primitive::U64) => {
+                wrap! { Wrap => Format::Primitive(Primitive::U64) };
+                visitor.visit_seq(SizedSequence {
+                    wrapper: Wrap,
+                    state: &mut *self.state,
+                    remaining: len as usize,
+                })
+            },
+            _ => visitor.visit_seq(SizedSequence {
+                wrapper: WrapAny(inner),
+                state: &mut *self.state,
+                remaining: len as usize,
+            }),
+        }
     }
 
     #[inline]
@@ -653,7 +759,7 @@ struct EnumVariants<'state, 'r, 'format, R> {
 
 impl<'state, 'de, 'r, 'format, R: Read> EnumAccess<'de> for EnumVariants<'state, 'r, 'format, R> {
     type Error = DeserializeError;
-    type Variant = Deserializer<'state, 'r, 'format, R>;
+    type Variant = Deserializer<'state, 'r, 'format, R, FormatId>;
 
     fn variant_seed<V>(self, seed: V) -> Result<(V::Value, Self::Variant), Self::Error>
     where
@@ -676,7 +782,9 @@ impl<'state, 'de, 'r, 'format, R: Read> EnumAccess<'de> for EnumVariants<'state,
     }
 }
 
-impl<'state, 'de, 'r, 'format, R: Read> VariantAccess<'de> for Deserializer<'state, 'r, 'format, R> {
+impl<'state, 'de, 'r, 'format, R: Read, P: ProvideFormat<'format>> VariantAccess<'de>
+    for Deserializer<'state, 'r, 'format, R, P>
+{
     type Error = DeserializeError;
 
     fn unit_variant(self) -> Result<(), Self::Error> {
@@ -770,25 +878,42 @@ impl<'de, 'state, 'r, 'format, R: Read> SeqAccess<'de> for TupleFields<'state, '
     }
 }
 
-struct SizedSequence<'state, 'r, 'format, R> {
+trait Wrapper<'de, 'format> {
+    fn deserialize_seed<R: Read, T: de::DeserializeSeed<'de>>(
+        &self, seed: T, state: &mut State<'_, 'format, R>,
+    ) -> Result<T::Value, DeserializeError>;
+}
+
+struct WrapAny(FormatId);
+
+impl<'de, 'format> Wrapper<'de, 'format> for WrapAny {
+    #[inline(always)]
+    fn deserialize_seed<R: Read, T: de::DeserializeSeed<'de>>(
+        &self, seed: T, state: &mut State<'_, 'format, R>,
+    ) -> Result<T::Value, DeserializeError> {
+        seed.deserialize(Deserializer { format: self.0, state })
+    }
+}
+
+struct SizedSequence<'state, 'r, 'format, R, Wrap> {
     remaining: usize,
-    format: FormatId,
+    wrapper: Wrap,
     state: &'state mut State<'r, 'format, R>,
 }
 
-impl<'state, 'de, 'r, 'format, R: Read> SeqAccess<'de> for SizedSequence<'state, 'r, 'format, R> {
+impl<'state, 'de, 'r, 'format, R: Read, Wrap: Wrapper<'de, 'format>> SeqAccess<'de>
+    for SizedSequence<'state, 'r, 'format, R, Wrap>
+{
     type Error = DeserializeError;
 
+    #[inline(always)]
     fn next_element_seed<T>(&mut self, seed: T) -> Result<Option<T::Value>, Self::Error>
     where
         T: de::DeserializeSeed<'de>,
     {
         if let Some(remaining) = self.remaining.checked_sub(1) {
             self.remaining = remaining;
-            let item = seed.deserialize(Deserializer {
-                format: self.format,
-                state: &mut *self.state,
-            })?;
+            let item = self.wrapper.deserialize_seed(seed, &mut *self.state)?;
 
             Ok(Some(item))
         } else {

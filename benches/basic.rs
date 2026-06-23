@@ -28,9 +28,21 @@ fn bench_struct(c: &mut Criterion) {
     });
 }
 
+fn bench_primitive_sequence(c: &mut Criterion) {
+    let data: Vec<i32> = vec![0x11223344; 1_000_000];
+    let bytes = blzde::to_vec(&data);
+
+    c.bench_function("primitive_sequence", |c| {
+        c.iter(|| {
+            let val: Vec<i32> = blzde::from_slice(black_box(&bytes)).unwrap();
+            black_box(val)
+        })
+    });
+}
+
 criterion_group! {
     name = benches;
     config = Criterion::default().measurement_time(Duration::from_secs(5));
-    targets = bench_struct
+    targets = bench_struct, bench_primitive_sequence
 }
 criterion_main!(benches);
