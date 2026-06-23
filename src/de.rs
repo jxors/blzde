@@ -159,6 +159,7 @@ impl<'state, 'r, 'format, R: Read> Deserializer<'state, 'r, 'format, R> {
 
 impl<'state, 'format, 'r, 'de, R: Read> de::Deserializer<'de> for Deserializer<'state, 'r, 'format, R> {
     type Error = DeserializeError;
+    #[inline]
     fn deserialize_any<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: de::Visitor<'de>,
@@ -178,6 +179,7 @@ impl<'state, 'format, 'r, 'de, R: Read> de::Deserializer<'de> for Deserializer<'
         }
     }
 
+    #[inline]
     fn deserialize_bool<V>(mut self, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: de::Visitor<'de>,
@@ -186,6 +188,7 @@ impl<'state, 'format, 'r, 'de, R: Read> de::Deserializer<'de> for Deserializer<'
         visitor.visit_bool(v != 0)
     }
 
+    #[inline]
     fn deserialize_i8<V>(mut self, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: de::Visitor<'de>,
@@ -194,6 +197,7 @@ impl<'state, 'format, 'r, 'de, R: Read> de::Deserializer<'de> for Deserializer<'
         visitor.visit_i8(v as i8)
     }
 
+    #[inline]
     fn deserialize_i16<V>(mut self, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: de::Visitor<'de>,
@@ -202,6 +206,7 @@ impl<'state, 'format, 'r, 'de, R: Read> de::Deserializer<'de> for Deserializer<'
         visitor.visit_i16(v as i16)
     }
 
+    #[inline]
     fn deserialize_i32<V>(mut self, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: de::Visitor<'de>,
@@ -210,6 +215,7 @@ impl<'state, 'format, 'r, 'de, R: Read> de::Deserializer<'de> for Deserializer<'
         visitor.visit_i32(v as i32)
     }
 
+    #[inline]
     fn deserialize_i64<V>(mut self, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: de::Visitor<'de>,
@@ -218,6 +224,7 @@ impl<'state, 'format, 'r, 'de, R: Read> de::Deserializer<'de> for Deserializer<'
         visitor.visit_i64(v as i64)
     }
 
+    #[inline]
     fn deserialize_u8<V>(mut self, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: de::Visitor<'de>,
@@ -226,6 +233,7 @@ impl<'state, 'format, 'r, 'de, R: Read> de::Deserializer<'de> for Deserializer<'
         visitor.visit_u8(v as u8)
     }
 
+    #[inline]
     fn deserialize_u16<V>(mut self, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: de::Visitor<'de>,
@@ -234,6 +242,7 @@ impl<'state, 'format, 'r, 'de, R: Read> de::Deserializer<'de> for Deserializer<'
         visitor.visit_u16(v as u16)
     }
 
+    #[inline]
     fn deserialize_u32<V>(mut self, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: de::Visitor<'de>,
@@ -242,6 +251,7 @@ impl<'state, 'format, 'r, 'de, R: Read> de::Deserializer<'de> for Deserializer<'
         visitor.visit_u32(v as u32)
     }
 
+    #[inline]
     fn deserialize_u64<V>(mut self, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: de::Visitor<'de>,
@@ -250,6 +260,7 @@ impl<'state, 'format, 'r, 'de, R: Read> de::Deserializer<'de> for Deserializer<'
         visitor.visit_u64(v)
     }
 
+    #[inline]
     fn deserialize_u128<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: de::Visitor<'de>,
@@ -259,6 +270,7 @@ impl<'state, 'format, 'r, 'de, R: Read> de::Deserializer<'de> for Deserializer<'
         visitor.visit_u128(u128::from_le_bytes(buf))
     }
 
+    #[inline]
     fn deserialize_i128<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: de::Visitor<'de>,
@@ -268,6 +280,7 @@ impl<'state, 'format, 'r, 'de, R: Read> de::Deserializer<'de> for Deserializer<'
         visitor.visit_i128(i128::from_le_bytes(buf))
     }
 
+    #[inline]
     fn deserialize_f32<V>(mut self, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: de::Visitor<'de>,
@@ -276,6 +289,7 @@ impl<'state, 'format, 'r, 'de, R: Read> de::Deserializer<'de> for Deserializer<'
         visitor.visit_f32(f32::from_bits(v as u32))
     }
 
+    #[inline]
     fn deserialize_f64<V>(mut self, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: de::Visitor<'de>,
@@ -284,6 +298,7 @@ impl<'state, 'format, 'r, 'de, R: Read> de::Deserializer<'de> for Deserializer<'
         visitor.visit_f64(f64::from_bits(v))
     }
 
+    #[inline]
     fn deserialize_char<V>(mut self, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: de::Visitor<'de>,
@@ -292,6 +307,7 @@ impl<'state, 'format, 'r, 'de, R: Read> de::Deserializer<'de> for Deserializer<'
         visitor.visit_char((v as u32).try_into().unwrap())
     }
 
+    #[inline]
     fn deserialize_str<V>(mut self, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: de::Visitor<'de>,
@@ -308,6 +324,7 @@ impl<'state, 'format, 'r, 'de, R: Read> de::Deserializer<'de> for Deserializer<'
         visitor.visit_string(string)
     }
 
+    #[inline]
     fn deserialize_string<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: de::Visitor<'de>,
@@ -315,6 +332,7 @@ impl<'state, 'format, 'r, 'de, R: Read> de::Deserializer<'de> for Deserializer<'
         self.deserialize_str(visitor)
     }
 
+    #[inline]
     fn deserialize_bytes<V>(mut self, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: de::Visitor<'de>,
@@ -330,6 +348,7 @@ impl<'state, 'format, 'r, 'de, R: Read> de::Deserializer<'de> for Deserializer<'
         visitor.visit_byte_buf(bytes)
     }
 
+    #[inline]
     fn deserialize_byte_buf<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: de::Visitor<'de>,
@@ -337,6 +356,7 @@ impl<'state, 'format, 'r, 'de, R: Read> de::Deserializer<'de> for Deserializer<'
         self.deserialize_bytes(visitor)
     }
 
+    #[inline]
     fn deserialize_option<V>(mut self, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: de::Visitor<'de>,
@@ -355,6 +375,7 @@ impl<'state, 'format, 'r, 'de, R: Read> de::Deserializer<'de> for Deserializer<'
         }
     }
 
+    #[inline]
     fn deserialize_unit<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: de::Visitor<'de>,
@@ -368,6 +389,7 @@ impl<'state, 'format, 'r, 'de, R: Read> de::Deserializer<'de> for Deserializer<'
         visitor.visit_unit()
     }
 
+    #[inline]
     fn deserialize_unit_struct<V>(self, _name: &'static str, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: de::Visitor<'de>,
@@ -383,6 +405,7 @@ impl<'state, 'format, 'r, 'de, R: Read> de::Deserializer<'de> for Deserializer<'
         visitor.visit_unit()
     }
 
+    #[inline]
     fn deserialize_newtype_struct<V>(self, name: &'static str, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: de::Visitor<'de>,
@@ -390,6 +413,7 @@ impl<'state, 'format, 'r, 'de, R: Read> de::Deserializer<'de> for Deserializer<'
         self.deserialize_tuple_struct(name, 1, visitor)
     }
 
+    #[inline]
     fn deserialize_seq<V>(mut self, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: de::Visitor<'de>,
@@ -409,6 +433,7 @@ impl<'state, 'format, 'r, 'de, R: Read> de::Deserializer<'de> for Deserializer<'
         })
     }
 
+    #[inline]
     fn deserialize_tuple<V>(self, _len: usize, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: de::Visitor<'de>,
@@ -426,6 +451,7 @@ impl<'state, 'format, 'r, 'de, R: Read> de::Deserializer<'de> for Deserializer<'
         })
     }
 
+    #[inline]
     fn deserialize_tuple_struct<V>(self, _name: &'static str, len: usize, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: de::Visitor<'de>,
@@ -433,6 +459,7 @@ impl<'state, 'format, 'r, 'de, R: Read> de::Deserializer<'de> for Deserializer<'
         self.deserialize_tuple(len, visitor)
     }
 
+    #[inline]
     fn deserialize_map<V>(mut self, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: de::Visitor<'de>,
@@ -479,6 +506,7 @@ impl<'state, 'format, 'r, 'de, R: Read> de::Deserializer<'de> for Deserializer<'
         }
     }
 
+    #[inline]
     fn deserialize_enum<V>(
         mut self, _name: &'static str, _variants: &'static [&'static str], visitor: V,
     ) -> Result<V::Value, Self::Error>
@@ -503,6 +531,7 @@ impl<'state, 'format, 'r, 'de, R: Read> de::Deserializer<'de> for Deserializer<'
         })
     }
 
+    #[inline]
     fn deserialize_identifier<V>(self, _visitor: V) -> Result<V::Value, Self::Error>
     where
         V: de::Visitor<'de>,
@@ -513,6 +542,7 @@ impl<'state, 'format, 'r, 'de, R: Read> de::Deserializer<'de> for Deserializer<'
         });
     }
 
+    #[inline]
     fn deserialize_ignored_any<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: de::Visitor<'de>,
@@ -812,53 +842,82 @@ struct SymbolDeserializer<'s>(&'s str);
 impl<'de, 's> de::Deserializer<'de> for SymbolDeserializer<'s> {
     type Error = DeserializeError;
 
+    #[inline]
     fn deserialize_any<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: de::Visitor<'de> {
         visitor.visit_str(self.0)
     }
     
+    #[inline]
     fn deserialize_str<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: de::Visitor<'de> {
         visitor.visit_str(self.0)
     }
 
+    #[inline]
     fn deserialize_identifier<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: de::Visitor<'de> {
         visitor.visit_str(self.0)
     }
 
+    #[inline]
     fn deserialize_ignored_any<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
         V: de::Visitor<'de> {
         visitor.visit_str(self.0)
     }
 
+    #[inline]
     fn deserialize_bool<V>(self, _visitor: V) -> Result<V::Value, Self::Error> where V: de::Visitor<'de> { unreachable!() }
+    #[inline]
     fn deserialize_i8<V>(self, _visitor: V) -> Result<V::Value, Self::Error> where V: de::Visitor<'de> { unreachable!() }
+    #[inline]
     fn deserialize_i16<V>(self, _visitor: V) -> Result<V::Value, Self::Error> where V: de::Visitor<'de> { unreachable!() }
+    #[inline]
     fn deserialize_i32<V>(self, _visitor: V) -> Result<V::Value, Self::Error> where V: de::Visitor<'de> { unreachable!() }
+    #[inline]
     fn deserialize_i64<V>(self, _visitor: V) -> Result<V::Value, Self::Error> where V: de::Visitor<'de> { unreachable!() }
+    #[inline]
     fn deserialize_u8<V>(self, _visitor: V) -> Result<V::Value, Self::Error> where V: de::Visitor<'de> { unreachable!() }
+    #[inline]
     fn deserialize_u16<V>(self, _visitor: V) -> Result<V::Value, Self::Error> where V: de::Visitor<'de> { unreachable!() }
+    #[inline]
     fn deserialize_u32<V>(self, _visitor: V) -> Result<V::Value, Self::Error> where V: de::Visitor<'de> { unreachable!() }
+    #[inline]
     fn deserialize_u64<V>(self, _visitor: V) -> Result<V::Value, Self::Error> where V: de::Visitor<'de> { unreachable!() }
+    #[inline]
     fn deserialize_f32<V>(self, _visitor: V) -> Result<V::Value, Self::Error> where V: de::Visitor<'de> { unreachable!() }
+    #[inline]
     fn deserialize_f64<V>(self, _visitor: V) -> Result<V::Value, Self::Error> where V: de::Visitor<'de> { unreachable!() }
+    #[inline]
     fn deserialize_char<V>(self, _visitor: V) -> Result<V::Value, Self::Error> where V: de::Visitor<'de> { unreachable!() }
+    #[inline]
     fn deserialize_string<V>(self, _visitor: V) -> Result<V::Value, Self::Error> where V: de::Visitor<'de> { unreachable!() }
+    #[inline]
     fn deserialize_bytes<V>(self, _visitor: V) -> Result<V::Value, Self::Error> where V: de::Visitor<'de> { unreachable!() }
+    #[inline]
     fn deserialize_byte_buf<V>(self, _visitor: V) -> Result<V::Value, Self::Error> where V: de::Visitor<'de> { unreachable!() }
+    #[inline]
     fn deserialize_option<V>(self, _visitor: V) -> Result<V::Value, Self::Error> where V: de::Visitor<'de> { unreachable!() }
+    #[inline]
     fn deserialize_unit<V>(self, _visitor: V) -> Result<V::Value, Self::Error> where V: de::Visitor<'de> { unreachable!() }
+    #[inline]
     fn deserialize_unit_struct<V>(self, _name: &'static str, _visitor: V) -> Result<V::Value, Self::Error> where V: de::Visitor<'de> { unreachable!() }
+    #[inline]
     fn deserialize_newtype_struct<V>(self, _name: &'static str, _visitor: V) -> Result<V::Value, Self::Error> where V: de::Visitor<'de> { unreachable!() }
+    #[inline]
     fn deserialize_seq<V>(self, _visitor: V) -> Result<V::Value, Self::Error> where V: de::Visitor<'de> { unreachable!() }
+    #[inline]
     fn deserialize_tuple<V>(self, _len: usize, _visitor: V) -> Result<V::Value, Self::Error> where V: de::Visitor<'de> { unreachable!() }
+    #[inline]
     fn deserialize_tuple_struct<V>(self, _name: &'static str, _len: usize, _visitor: V) -> Result<V::Value, Self::Error> where V: de::Visitor<'de> { unreachable!() }
+    #[inline]
     fn deserialize_map<V>(self, _visitor: V) -> Result<V::Value, Self::Error> where V: de::Visitor<'de> { unreachable!() }
+    #[inline]
     fn deserialize_struct<V>(self, _name: &'static str, _fields: &'static [&'static str], _visitor: V) -> Result<V::Value, Self::Error> where V: de::Visitor<'de> { unreachable!() }
+    #[inline]
     fn deserialize_enum<V>(self, _name: &'static str, _variants: &'static [&'static str], _visitor: V) -> Result<V::Value, Self::Error> where V: de::Visitor<'de> { unreachable!() }
 }
