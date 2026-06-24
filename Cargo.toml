@@ -1,6 +1,6 @@
 [package]
 name = "blzde"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "A self-describing serde serialization format that deserializes big datastructures quickly"
 license = "MPL-2.0"

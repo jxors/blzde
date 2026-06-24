@@ -21,7 +21,7 @@ Only crates that support serde and use a self-describing format are shown.
 
 | Crate | `log` | `mesh` | `minecraft_savedata` | `mk48` |
 |---|--:|--:|--:|--:|
-| **blzde** | **2.2693 ms** | **7.7691 ms** | **2.1259 ms** | **5.5503 ms** |
+| **blzde** | **2.1622 ms** | **6.9222 ms** | **2.2097 ms** | **5.6843 ms** |
 | [rmp-serde 1.3.0][rmp-serde] | 3.0835 ms | 15.039 ms | 2.5811 ms | 9.6017 ms |
 | [nachricht-serde 0.4.0][nachricht-serde] | 3.8647 ms | 23.692 ms | 3.3899 ms | 14.616 ms |
 | [serde-brief 0.1.1][serde-brief] | 4.5388 ms | 29.015 ms | 4.7763 ms | 19.952 ms |
