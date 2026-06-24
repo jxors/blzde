@@ -29,6 +29,39 @@ macro_rules! wrap {
     };
 }
 
+#[derive(Copy, Clone)]
+struct WrapStruct<'format> {
+    fields: View<'format, NamedFormat>,
+    id: FormatId,
+}
+
+impl<'format> ProvideFormat<'format> for WrapStruct<'format> {
+    #[inline(always)]
+    fn format<R>(&self, _: &State<'_, 'format, R>) -> Format<'format> {
+        Format::Struct {
+            fields: self.fields,
+        }
+    }
+
+    #[inline(always)]
+    fn id(&self) -> FormatId {
+        self.id
+    }
+}
+
+impl<'de, 'format> Wrapper<'de, 'format> for WrapStruct<'format> {
+    #[inline(always)]
+    fn deserialize_seed<R: Read, T: de::DeserializeSeed<'de>>(
+        &self, seed: T, state: &mut State<'_, 'format, R>,
+    ) -> Result<T::Value, DeserializeError>
+    {
+        seed.deserialize(Deserializer {
+            format: *self,
+            state
+        })
+    }
+}
+
 #[derive(Debug)]
 pub enum DeserializeError {
     UnexpectedFormat { expected: &'static str, found: Format<'static> },
@@ -540,6 +573,13 @@ impl<'state, 'format, 'r, 'de, R: Read, P: ProvideFormat<'format>> de::Deseriali
                     remaining: len as usize,
                 })
             },
+            Format::Struct { fields } => {
+                visitor.visit_seq(SizedSequence {
+                    wrapper: WrapStruct { fields, id: inner },
+                    state: &mut *self.state,
+                    remaining: len as usize,
+                })
+            }
             _ => visitor.visit_seq(SizedSequence {
                 wrapper: WrapAny(inner),
                 state: &mut *self.state,
