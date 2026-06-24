@@ -16,7 +16,7 @@ fn bench_struct(c: &mut Criterion) {
             field2: 7,
             field3: Some(true),
         };
-        10_000
+        100_000
     ];
     let bytes = blzde::to_vec(&data);
 

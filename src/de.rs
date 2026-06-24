@@ -29,6 +29,71 @@ macro_rules! wrap {
     };
 }
 
+macro_rules! dispatch {
+    ($state:expr, $id:expr, $var:ident => $body:block) => {{
+        let id = $id;
+        match $state.buf.format(id) {
+            Format::Primitive(Primitive::U8) => {
+                wrap! { Wrap => Format::Primitive(Primitive::U8) };
+                let $var = Wrap;
+                $body
+            },
+            Format::Primitive(Primitive::U16) => {
+                wrap! { Wrap => Format::Primitive(Primitive::U16) };
+                let $var = Wrap;
+                $body
+            },
+            Format::Primitive(Primitive::U32) => {
+                wrap! { Wrap => Format::Primitive(Primitive::U32) };
+                let $var = Wrap;
+                $body
+            },
+            Format::Primitive(Primitive::U64) => {
+                wrap! { Wrap => Format::Primitive(Primitive::U64) };
+                let $var = Wrap;
+                $body
+            },
+            Format::Struct { fields } => {
+                let $var = WrapStruct { fields, id };
+                $body
+            },
+            _ => {
+                let $var = WrapAny(id);
+                $body
+            },
+        }
+    }};
+}
+
+trait Wrapper<'de, 'format> {
+    fn deserialize_seed<R: Read, T: de::DeserializeSeed<'de>>(
+        &self, seed: T, state: &mut State<'_, 'format, R>,
+    ) -> Result<T::Value, DeserializeError>;
+}
+
+struct WrapAny(FormatId);
+
+impl<'de, 'format> Wrapper<'de, 'format> for WrapAny {
+    #[inline(always)]
+    fn deserialize_seed<R: Read, T: de::DeserializeSeed<'de>>(
+        &self, seed: T, state: &mut State<'_, 'format, R>,
+    ) -> Result<T::Value, DeserializeError> {
+        seed.deserialize(Deserializer { format: self.0, state })
+    }
+}
+
+impl<'format> ProvideFormat<'format> for WrapAny {
+    #[inline(always)]
+    fn format<R>(&self, state: &State<'_, 'format, R>) -> Format<'format> {
+        state.buf.format(self.0)
+    }
+
+    #[inline(always)]
+    fn id(&self) -> FormatId {
+        self.0
+    }
+}
+
 #[derive(Copy, Clone)]
 struct WrapStruct<'format> {
     fields: View<'format, NamedFormat>,
@@ -38,9 +103,7 @@ struct WrapStruct<'format> {
 impl<'format> ProvideFormat<'format> for WrapStruct<'format> {
     #[inline(always)]
     fn format<R>(&self, _: &State<'_, 'format, R>) -> Format<'format> {
-        Format::Struct {
-            fields: self.fields,
-        }
+        Format::Struct { fields: self.fields }
     }
 
     #[inline(always)]
@@ -53,12 +116,8 @@ impl<'de, 'format> Wrapper<'de, 'format> for WrapStruct<'format> {
     #[inline(always)]
     fn deserialize_seed<R: Read, T: de::DeserializeSeed<'de>>(
         &self, seed: T, state: &mut State<'_, 'format, R>,
-    ) -> Result<T::Value, DeserializeError>
-    {
-        seed.deserialize(Deserializer {
-            format: *self,
-            state
-        })
+    ) -> Result<T::Value, DeserializeError> {
+        seed.deserialize(Deserializer { format: *self, state })
     }
 }
 
@@ -540,51 +599,14 @@ impl<'state, 'format, 'r, 'de, R: Read, P: ProvideFormat<'format>> de::Deseriali
         };
 
         let len = self.read_oob_primitive(len)?;
-        match self.state.buf.format(inner) {
-            Format::Primitive(Primitive::U8) => {
-                wrap! { Wrap => Format::Primitive(Primitive::U8) };
+        dispatch! {
+            self.state, inner, wrapper => {
                 visitor.visit_seq(SizedSequence {
-                    wrapper: Wrap,
-                    state: &mut *self.state,
-                    remaining: len as usize,
-                })
-            },
-            Format::Primitive(Primitive::U16) => {
-                wrap! { Wrap => Format::Primitive(Primitive::U16) };
-                visitor.visit_seq(SizedSequence {
-                    wrapper: Wrap,
-                    state: &mut *self.state,
-                    remaining: len as usize,
-                })
-            },
-            Format::Primitive(Primitive::U32) => {
-                wrap! { Wrap => Format::Primitive(Primitive::U32) };
-                visitor.visit_seq(SizedSequence {
-                    wrapper: Wrap,
-                    state: &mut *self.state,
-                    remaining: len as usize,
-                })
-            },
-            Format::Primitive(Primitive::U64) => {
-                wrap! { Wrap => Format::Primitive(Primitive::U64) };
-                visitor.visit_seq(SizedSequence {
-                    wrapper: Wrap,
-                    state: &mut *self.state,
-                    remaining: len as usize,
-                })
-            },
-            Format::Struct { fields } => {
-                visitor.visit_seq(SizedSequence {
-                    wrapper: WrapStruct { fields, id: inner },
+                    wrapper,
                     state: &mut *self.state,
                     remaining: len as usize,
                 })
             }
-            _ => visitor.visit_seq(SizedSequence {
-                wrapper: WrapAny(inner),
-                state: &mut *self.state,
-                remaining: len as usize,
-            }),
         }
     }
 
@@ -770,12 +792,14 @@ impl<'state, 'de, 'r, 'format, R: Read> MapAccess<'de> for StructFields<'state, 
 impl<'state, 'de, 'r, 'format, R: Read> SeqAccess<'de> for StructFields<'state, 'r, 'format, R> {
     type Error = DeserializeError;
 
+    #[inline(always)]
     fn next_element_seed<T>(&mut self, seed: T) -> Result<Option<T::Value>, Self::Error>
     where
         T: de::DeserializeSeed<'de>,
     {
         if let Some((format, rest)) = self.fields.split_first() {
             self.fields = rest;
+
             seed.deserialize(Deserializer {
                 format: format.1,
                 state: &mut *self.state,
@@ -915,23 +939,6 @@ impl<'de, 'state, 'r, 'format, R: Read> SeqAccess<'de> for TupleFields<'state, '
     #[inline(always)]
     fn size_hint(&self) -> Option<usize> {
         Some(self.fields.len())
-    }
-}
-
-trait Wrapper<'de, 'format> {
-    fn deserialize_seed<R: Read, T: de::DeserializeSeed<'de>>(
-        &self, seed: T, state: &mut State<'_, 'format, R>,
-    ) -> Result<T::Value, DeserializeError>;
-}
-
-struct WrapAny(FormatId);
-
-impl<'de, 'format> Wrapper<'de, 'format> for WrapAny {
-    #[inline(always)]
-    fn deserialize_seed<R: Read, T: de::DeserializeSeed<'de>>(
-        &self, seed: T, state: &mut State<'_, 'format, R>,
-    ) -> Result<T::Value, DeserializeError> {
-        seed.deserialize(Deserializer { format: self.0, state })
     }
 }
 
