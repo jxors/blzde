@@ -196,6 +196,7 @@ impl Schema {
             (Schema::I128(a), Schema::I128(b)) => a.union_with(b),
             (Schema::I64(a), Schema::I64(b)) => a.union_with(b),
             (Schema::Str { len: len_a }, Schema::Str { len: len_b }) => len_a.union_with(len_b),
+            (Schema::Bytes { len: len_a }, Schema::Bytes { len: len_b }) => len_a.union_with(len_b),
             (
                 Schema::Seq { len, item },
                 Schema::Seq {
@@ -217,6 +218,7 @@ impl Schema {
                     a.union_with(b)?;
                 }
             },
+            (Schema::Unit, Schema::Unit) => (),
             (a, b) => return Err(UnionError { lhs: a.clone(), rhs: b }),
         }
 

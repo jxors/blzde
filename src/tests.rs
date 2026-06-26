@@ -203,6 +203,19 @@ fn test_tuple_roundtrip() {
 }
 
 #[test]
+fn test_unit_union() {
+    test_serde_roundtrip(&vec![(), ()]);
+}
+
+#[test]
+fn test_byte_union() {
+    test_serde_roundtrip(&vec![
+        serde_bytes::ByteBuf::from(&[0, 1, 2]),
+        serde_bytes::ByteBuf::from(&[3, 4, 5]),
+    ]);
+}
+
+#[test]
 fn test_nested_vec_roundtrip() {
     test_serde_roundtrip(&vec![vec![0, 1, 2], vec![3], vec![], vec![4, 5, 6, 7, 8, 9, 10]]);
 }
